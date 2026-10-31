@@ -386,8 +386,13 @@ fun AuthenticatedAppShell(
             AssignmentSource.CITEL -> aggregateAssignments(emptyList(), emptyList(), listOfNotNull(citelState.selectedTask))
         }.singleOrNull()
         selected?.let { item ->
-            AssignmentMarkdownActions(item, homeworkFileGateway,
-                aggregateAssignmentMarkdown(item, homeworkState, phyVlabState, citelState))
+            // 紧凑端详情可能由原生容器另起组合，壳层的 CompositionLocal 不一定传得过去，这里显式提供。
+            CompositionLocalProvider(
+                team.bjtuss.bjtuselfservice.shared.feature.assignment.LocalAssignmentCompletionStore provides session.assignmentCompletionStore,
+            ) {
+                AssignmentMarkdownActions(item, homeworkFileGateway,
+                    aggregateAssignmentMarkdown(item, homeworkState, phyVlabState, citelState))
+            }
         }
     }
     val assignmentSync = buildList {
@@ -1456,6 +1461,7 @@ fun AuthenticatedAppShell(
                 ) {
                     CompositionLocalProvider(
                         LocalBottomBarClearance provides if (usesBottomUnderlap) bottomContentClearance else 0.dp,
+                        team.bjtuss.bjtuselfservice.shared.feature.assignment.LocalAssignmentCompletionStore provides session.assignmentCompletionStore,
                         LocalTopBarClearance provides topBarClearance,
                         LocalReportTopScroll provides reportTopScroll,
                         LocalNativeScrollControllerReporter provides reportNativeScrollController.takeIf { nativeScrollingEnabled },
@@ -1463,6 +1469,11 @@ fun AuthenticatedAppShell(
                     ) {
                         content()
                     }
+                    team.bjtuss.bjtuselfservice.shared.feature.assignment.AssignmentIgnoreUndoBar(
+                        session.assignmentCompletionStore,
+                        Modifier.align(Alignment.BottomCenter)
+                            .padding(bottom = 12.dp + if (usesBottomUnderlap) bottomContentClearance else 0.dp),
+                    )
                     // 同步进度条悬浮在内容顶部，不参与 Column 布局，避免其出现时
                     // 把下方内容挤矮一丝。
                     // When UIKit owns the native title bar it also owns the
@@ -1562,6 +1573,7 @@ fun AuthenticatedAppShell(
                         homework = homeworkState.homework,
                         exams = examState.exams,
                         phyVlabEvents = homeAgendaEvents,
+                        reminderAssignments = aggregatedAssignments,
                         currentWeek = courseState.currentWeek,
                         academicWeeks = courseState.homeAcademicWeeks,
                         // 周数只在被校历确认后显示：确认前统一「日程加载中」，

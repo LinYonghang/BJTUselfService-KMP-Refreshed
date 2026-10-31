@@ -45,7 +45,10 @@ internal fun AggregatedAssignmentWorkspace(
     var now by remember { mutableStateOf(Clock.System.now().epochSeconds) }
     val list = rememberLazyListState()
     var selectedKey by remember { mutableStateOf<String?>(null) }
-    val visible = filterAggregateAssignments(assignments, filters, now)
+    val completion = assignmentCompletionState()
+    val (visible, ignored) = partitionIgnoredAssignments(filterAggregateAssignments(assignments, filters, now),
+        completion.completedKeys, { it.submitted }, { it.completionKey() })
+    var ignoredExpanded by rememberIgnoredSectionExpanded()
     // 搜索是独立的一层：结果来自全部作业，不经过筛选；列表顶部的同步横幅和筛选 banner 一并让位。
     val searchActive = search?.active == true
     val query = search?.query.orEmpty()
@@ -62,6 +65,7 @@ internal fun AggregatedAssignmentWorkspace(
         TopScrollLazyColumn(state = list, modifier = listModifier.desktopTouchScroll(list),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp + top, bottom = 24.dp + bottom),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (completion.failure != null) item("completion-error") { AssignmentCompletionFeedback() }
             if (searchActive) {
                 if (results.isEmpty()) item("search-empty") {
                     PageSearchEmptyState(query, hint = "搜索课程名、作业标题或来源", modifier = Modifier.animateItem())
@@ -80,19 +84,27 @@ internal fun AggregatedAssignmentWorkspace(
                 }
                 if (visible.isEmpty()) item("empty") {
                     Column(Modifier.animateItem().fillMaxWidth().padding(vertical = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(if (assignments.isEmpty()) "暂无作业" else "当前筛选下没有作业", style = MaterialTheme.typography.titleMedium)
-                        TextButton(onClick = { showFilters = true }) { Text("调整筛选") }
+                        Text(assignmentEmptyTitle(assignments.isNotEmpty(), ignored.isNotEmpty(), filters.active),
+                            style = MaterialTheme.typography.titleMedium)
+                        if (assignments.isNotEmpty() && filters.active) TextButton(onClick = { showFilters = true }) { Text("调整筛选") }
                     }
                 }
             }
             // 同一作业在列表与结果里沿用同一 key：打开搜索时匹配的卡片留在原地，其余淡出。
+            val open: (AggregatedAssignment) -> Unit = { item ->
+                if (expanded) selectedKey = item.key
+                onOpen(item)
+            }
             items(if (searchActive) results else visible, key = { it.key }) { item ->
                 Box(Modifier.animateItem()) {
-                    AggregatedAssignmentCard(item, now, expanded && item.key == selectedKey) {
-                        if (expanded) selectedKey = item.key
-                        onOpen(item)
+                    CompositionLocalProvider(LocalAssignmentSwipeToIgnore provides !searchActive) {
+                        AggregatedAssignmentCard(item, now, expanded && item.key == selectedKey) { open(item) }
                     }
                 }
+            }
+            if (!searchActive) ignoredAssignmentsSection(ignored, ignoredExpanded, { ignoredExpanded = !ignoredExpanded },
+                key = { it.key }) { item ->
+                AggregatedAssignmentCard(item, now, expanded && item.key == selectedKey) { open(item) }
             }
         }
     }
@@ -159,9 +171,26 @@ internal fun ColumnScope.AggregateAssignmentFilterSheet(assignments: List<Aggreg
             }
         }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            var dateInput by remember(filters.beforeDate) { mutableStateOf(filters.beforeDate.orEmpty()) }
+            val validDate = dateInput.isBlank() || runCatching { kotlinx.datetime.LocalDate.parse(dateInput) }.isSuccess
+            OutlinedTextField(
+                value = dateInput,
+                onValueChange = { value ->
+                    dateInput = value
+                    if (value.isBlank()) onChange(filters.copy(beforeDate = null))
+                    else if (runCatching { kotlinx.datetime.LocalDate.parse(value) }.isSuccess)
+                        onChange(filters.copy(beforeDate = value))
+                },
+                label = { Text("截止日期早于（不含当天）") },
+                placeholder = { Text("YYYY-MM-DD") },
+                supportingText = { Text(if (validDate) "按显示日期筛选；留空显示全部日期" else "请输入有效日期，例如 2026-10-30") },
+                isError = !validDate,
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
             Text("截止时间", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(!filters.hideExpired, { onChange(filters.copy(hideExpired = false)) }, shape = RoundedCornerShape(10.dp), label = { Text("显示全部日期") })
+                FilterChip(!filters.hideExpired && filters.beforeDate == null, { onChange(filters.copy(hideExpired = false, beforeDate = null)) }, shape = RoundedCornerShape(10.dp), label = { Text("显示全部日期") })
                 FilterChip(filters.hideExpired, { onChange(filters.copy(hideExpired = true)) }, shape = RoundedCornerShape(10.dp), label = { Text("隐藏已过期") })
                 FilterChip(filters.hideSubmitted, { onChange(filters.copy(hideSubmitted = !filters.hideSubmitted)) }, shape = RoundedCornerShape(10.dp), label = { Text("隐藏已提交") })
             }
@@ -211,7 +240,7 @@ private fun AssignmentDetailPane(item: AggregatedAssignment?, gateway: HomeworkF
     }
 }
 
-/** 宽屏详情框架和手机独立详情页共用导出入口；按钮在窄屏或大字号下自动换行。 */
+/** 宽屏详情框架和手机独立详情页共用导出与忽略入口；按钮在窄屏或大字号下自动换行。 */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun AssignmentMarkdownActions(item: AggregatedAssignment, gateway: HomeworkFileGateway,
@@ -241,6 +270,9 @@ internal fun AssignmentMarkdownActions(item: AggregatedAssignment, gateway: Home
                     } finally { saving = false }
                 }
             }) { Text("保存为 Markdown") }
+            AssignmentIgnoreDetailButton(item) { ignored ->
+                feedback = if (ignored) "已忽略，不再计入截止提醒" else "已取消忽略"
+            }
         }
         feedback?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
     }

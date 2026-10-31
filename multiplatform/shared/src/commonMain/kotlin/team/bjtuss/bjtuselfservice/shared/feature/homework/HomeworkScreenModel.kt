@@ -66,10 +66,7 @@ data class HomeworkUiState(
         get() = homework.map(Homework::courseName).filter(String::isNotBlank).distinct().sorted()
 
     val visibleHomework: List<Homework>
-        get() = sortHomework(
-            filterHomework(homework, selectedCourses, hideExpired, now, hideSubmitted),
-            sortOrder,
-        )
+        get() = sortHomework(filterHomework(homework, selectedCourses, hideExpired, now, hideSubmitted), sortOrder)
 
     val dueSoonCount: Int
         get() = dueSoonHomeworkCount(visibleHomework, now, timeZone)

@@ -120,7 +120,10 @@ fun PhyVlabWorkspace(
     // 真实偏移上报给壳层算玻璃浓度（手势累加会漂，读列表状态不会）。
     val nowEpochSeconds = rememberPhyVlabNowEpochSeconds()
     val allActivities = model.allActivities()
-    val displayedActivities = filterPhyVlabActivities(allActivities, filters, nowEpochSeconds)
+    val completion = assignmentCompletionState()
+    val (displayedActivities, ignoredActivities) = partitionIgnoredAssignments(
+        filterPhyVlabActivities(allActivities, filters, nowEpochSeconds), completion.completedKeys, { it.completed }, { it.completionKey() })
+    var ignoredExpanded by rememberIgnoredSectionExpanded()
     val dueSoon = displayedActivities.count { !it.completed && it.dueTimestamp?.let { due -> due in nowEpochSeconds..(nowEpochSeconds + 48 * 3600) } == true }
     val subtitle = (if (dueSoon > 0) "未来 48 小时内有 $dueSoon 项未提交" else "未来 48 小时内暂无临近截止项") +
         if (filters.active) " · 已筛选" else ""
@@ -138,6 +141,7 @@ fun PhyVlabWorkspace(
     // 原生栏 underlap 时居中态保持老位置（外层无占位，这里按栏高补回）。
     val topClearance = LocalTopBarClearance.current
     Column(modifier = modifier.fillMaxSize()) {
+        AssignmentCompletionFeedback()
         if (holdNetwork) {
             Box(
                 Modifier.fillMaxSize().padding(top = topClearance),
@@ -238,16 +242,23 @@ fun PhyVlabWorkspace(
                 if (displayedActivities.isEmpty()) item {
                     Column(Modifier.fillMaxWidth().padding(vertical = 28.dp), horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(if (allActivities.isEmpty()) "暂无作业" else "当前筛选下没有作业", style = MaterialTheme.typography.titleMedium)
-                        TextButton(onClick = { showFilters = true }) { Text("调整筛选") }
+                        Text(assignmentEmptyTitle(allActivities.isNotEmpty(), ignoredActivities.isNotEmpty(), filters.active),
+                            style = MaterialTheme.typography.titleMedium)
+                        if (filters.active) TextButton(onClick = { showFilters = true }) { Text("调整筛选") }
                     }
                 }
                 items(displayedActivities, key = { "activity-${it.id}" }) { activity ->
-                    PhyVlabActivityRow(
-                        activity = activity,
-                        nowEpochSeconds = nowEpochSeconds,
-                        onOpen = { onOpenActivityDetail(activity) },
-                    )
+                    Box(Modifier.animateItem()) {
+                        PhyVlabActivityRow(
+                            activity = activity,
+                            nowEpochSeconds = nowEpochSeconds,
+                            onOpen = { onOpenActivityDetail(activity) },
+                        )
+                    }
+                }
+                ignoredAssignmentsSection(ignoredActivities, ignoredExpanded, { ignoredExpanded = !ignoredExpanded },
+                    { "activity-${it.id}" }) { activity ->
+                    PhyVlabActivityRow(activity = activity, nowEpochSeconds = nowEpochSeconds, onOpen = { onOpenActivityDetail(activity) })
                 }
             }
         }
@@ -365,7 +376,8 @@ private fun PhyVlabCourseRow(course: PhyVlabCourse, selected: Boolean, onSelect:
 
 internal fun filterPhyVlabActivities(activities: List<PhyVlabActivity>, filters: AssignmentFilters, now: Long): List<PhyVlabActivity> {
     val visible = activities.filter { (filters.courses.isEmpty() || it.courseId in filters.courses) &&
-        (!filters.hideSubmitted || !it.completed) && (!filters.hideExpired || it.dueTimestamp?.let { due -> due > now } != false) }
+        (!filters.hideSubmitted || !it.completed) &&
+        (!filters.hideExpired || it.dueTimestamp?.let { due -> due > now } != false) }
     return when (filters.sortOrder) {
         1 -> visible.sortedBy { it.dueTimestamp ?: Long.MAX_VALUE }
         2 -> visible.sortedByDescending { it.dueTimestamp ?: Long.MIN_VALUE }
@@ -375,15 +387,12 @@ internal fun filterPhyVlabActivities(activities: List<PhyVlabActivity>, filters:
 
 @Composable
 internal fun PhyVlabActivityRow(activity: PhyVlabActivity, nowEpochSeconds: Long, onOpen: () -> Unit, source: AssignmentSource? = null) {
-    ElevatedCard(onClick = onOpen, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(17.dp),
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.fillMaxWidth().padding(15.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            AssignmentCardHeader(activity.courseName, activity.title, activity.completed, source)
-            Text("类型 · ${activity.activityType}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("开始 · ${assignmentStartText(activity.openText)}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("截止 · ${assignmentDeadlineText(activity.dueText)}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("评分 · ${assignmentGradeText(null, activity.completed, graded = null)}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+    AssignmentCard(activity.completionKey(), activity.title, activity.completed, onOpen) {
+        AssignmentCardHeader(activity.courseName, activity.title, activity.completed, source, completionKey = activity.completionKey())
+        Text("类型 · ${activity.activityType}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("开始 · ${assignmentStartText(activity.openText)}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("截止 · ${assignmentDeadlineText(activity.dueText)}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("评分 · ${assignmentGradeText(null, activity.completed, graded = null)}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -657,7 +666,7 @@ private fun PhyVlabAssignmentDetailContent(
                     containerColor = MaterialTheme.colorScheme.tertiaryContainer,
                     contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
                 ) {
-                    Text(page.description, style = MaterialTheme.typography.bodyMedium)
+                    Text(team.bjtuss.bjtuselfservice.shared.util.schoolRichTextToAnnotated(page.descriptionHtml.ifBlank { page.description }), style = MaterialTheme.typography.bodyMedium)
                 }
             }
             if (page.submittedFiles.isNotEmpty()) {

@@ -16,13 +16,15 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 internal fun AssignmentCardHeader(course: String, title: String, submitted: Boolean, source: AssignmentSource? = null,
-    statusLabel: String = if (submitted) "已提交" else "未提交") {
+    statusLabel: String = if (submitted) "已提交" else "未提交",
+    completionKey: AssignmentCompletionKey? = null) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(course, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         source?.let { AssignmentSourceBadge(it) }
         val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-        Surface(shape = RoundedCornerShape(999.dp),
+        if (isAssignmentIgnored(submitted, completionKey, assignmentCompletionState().completedKeys)) AssignmentIgnoredBadge()
+        else Surface(shape = RoundedCornerShape(999.dp),
             color = if (submitted) { if (dark) Color(0xFF174D2A) else Color(0xFFD9F2DF) }
                 else { if (dark) Color(0xFF5B4500) else Color(0xFFFFEFC2) },
             contentColor = if (submitted) { if (dark) Color(0xFF9BE7AA) else Color(0xFF1C6B35) }

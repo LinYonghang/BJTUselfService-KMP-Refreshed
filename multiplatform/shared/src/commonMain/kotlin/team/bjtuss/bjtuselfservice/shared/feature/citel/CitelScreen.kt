@@ -61,7 +61,11 @@ fun CitelWorkspace(model: CitelModel, holdNetwork: Boolean, onOpen: (String) -> 
     }
     LaunchedEffect(Unit) { while (true) { now = Clock.System.now().epochSeconds; delay(30_000) } }
     val scroll = rememberLazyListState()
-    val tasks = filteredCitelTasks(state.tasks.filter { selectedCourses.isEmpty() || it.courseId in selectedCourses }, pendingOnly, hideExpired, null, sortOrder, now)
+    val completion = assignmentCompletionState()
+    val (tasks, ignoredTasks) = partitionIgnoredAssignments(
+        filteredCitelTasks(state.tasks.filter { selectedCourses.isEmpty() || it.courseId in selectedCourses }, pendingOnly, hideExpired, null, sortOrder, now),
+        completion.completedKeys, { it.completed }, { it.completionKey() })
+    var ignoredExpanded by rememberIgnoredSectionExpanded()
     val topClearance = LocalTopBarClearance.current
     val bottomClearance = LocalBottomBarClearance.current
     val dueSoon = tasks.count { !it.completed && it.dueTime?.let { due -> due in now..(now + 48 * 3600) } == true }
@@ -71,6 +75,7 @@ fun CitelWorkspace(model: CitelModel, holdNetwork: Boolean, onOpen: (String) -> 
     TopScrollLazyColumn(state = scroll, modifier = modifier.fillMaxSize().desktopTouchScroll(scroll),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp + topClearance,
             bottom = 24.dp + bottomClearance), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (completion.failure != null) item("completion-error") { AssignmentCompletionFeedback() }
         state.message?.takeIf { state.failed }?.let { message ->
             item { AppErrorBanner(message, onRetry = { scope.launch { model.refresh() } }) }
         }
@@ -80,13 +85,16 @@ fun CitelWorkspace(model: CitelModel, holdNetwork: Boolean, onOpen: (String) -> 
         if (tasks.isEmpty()) item {
             Column(Modifier.fillMaxWidth().padding(vertical = 28.dp), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(when { state.refreshing -> "正在读取作业…"; state.tasks.isNotEmpty() -> "当前筛选下没有作业"; else -> "暂无作业" },
+                Text(if (state.refreshing) "正在读取作业…" else assignmentEmptyTitle(state.tasks.isNotEmpty(), ignoredTasks.isNotEmpty(), filters.active),
                     style = MaterialTheme.typography.titleMedium)
-                if (state.tasks.isNotEmpty()) TextButton(onClick = { showFilters = true }) { Text("调整筛选") }
+                if (state.tasks.isNotEmpty()) { if (filters.active) TextButton(onClick = { showFilters = true }) { Text("调整筛选") } }
                 else TextButton(onClick = { scope.launch { model.refresh() } }, enabled = !state.refreshing) { Text("刷新") }
             }
         }
         items(tasks, key = { it.id }) { task ->
+            Box(Modifier.animateItem()) { CitelTaskCard(task, onOpen = { model.showTask(task); onOpenTask?.invoke(task) }) }
+        }
+        ignoredAssignmentsSection(ignoredTasks, ignoredExpanded, { ignoredExpanded = !ignoredExpanded }, { it.id }) { task ->
             CitelTaskCard(task, onOpen = { model.showTask(task); onOpenTask?.invoke(task) })
         }
     }
@@ -114,20 +122,18 @@ internal fun filteredCitelTasks(tasks: List<CitelTask>, pendingOnly: Boolean, hi
 
 @Composable
 internal fun CitelTaskCard(task: CitelTask, onOpen: () -> Unit, source: AssignmentSource? = null) {
-    ElevatedCard(onClick = onOpen, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(17.dp),
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.fillMaxWidth().padding(15.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            AssignmentCardHeader(task.courseName, task.title, task.completed, source, statusLabel = task.cardStatusText)
-            CitelTaskLine("类型", if (task.programming) "编程作业" else "实验报告")
-            if (task.programming) CitelTaskLine("评测", task.submissionStatusText())
-            CitelTaskLine("开始", assignmentStartText(task.openTime))
-            task.discountTime?.let { CitelTaskLine("折扣", assignmentStartText(it) + (task.discount?.let { factor -> " · ×$factor" } ?: "")) }
-            CitelTaskLine("截止", assignmentDeadlineText(task.dueTime))
-            if (task.programming) {
-                CitelTaskLine("评分", task.grade?.takeIf { it.isNotBlank() } ?: "暂无")
-            } else {
-                CitelTaskLine("评分", assignmentGradeText(task.grade, task.completed, graded = null))
-            }
+    AssignmentCard(task.completionKey(), task.title, task.completed, onOpen) {
+        AssignmentCardHeader(task.courseName, task.title, task.completed, source, statusLabel = task.cardStatusText,
+            completionKey = task.completionKey())
+        CitelTaskLine("类型", if (task.programming) "编程作业" else "实验报告")
+        if (task.programming) CitelTaskLine("评测", task.submissionStatusText())
+        CitelTaskLine("开始", assignmentStartText(task.openTime))
+        task.discountTime?.let { CitelTaskLine("折扣", team.bjtuss.bjtuselfservice.shared.domain.time.formatDeadlineEpoch(it) + (task.discount?.let { factor -> " · ×$factor" } ?: "")) }
+        CitelTaskLine("截止", assignmentDeadlineText(task.dueTime))
+        if (task.programming) {
+            CitelTaskLine("评分", task.grade?.takeIf { it.isNotBlank() } ?: "暂无")
+        } else {
+            CitelTaskLine("评分", assignmentGradeText(task.grade, task.completed, graded = null))
         }
     }
 }
@@ -186,7 +192,7 @@ fun CitelDetailWorkspace(model: CitelModel, fileGateway: HomeworkFileGateway, on
         CitelDetailLine("课程", task.courseName)
         CitelDetailLine("类型", if (task.programming) "编程作业" else "实验报告")
         CitelDetailLine("开放时间", task.openTime?.let(::citelDateText) ?: "未提供")
-        task.discountTime?.let { CitelDetailLine("折扣开始", citelDateText(it) + (task.discount?.let { factor -> " · ×$factor" } ?: "")) }
+        task.discountTime?.let { CitelDetailLine("折扣开始", team.bjtuss.bjtuselfservice.shared.domain.time.formatDeadlineEpoch(it) + (task.discount?.let { factor -> " · ×$factor" } ?: "")) }
         CitelDetailLine("截止时间", task.dueTime?.let(::formatDeadlineEpoch) ?: "未提供")
         CitelDetailLine("提交状态", result?.displayStatus ?: state.submission?.status ?: task.submissionStatusText())
         if (task.programming) {
