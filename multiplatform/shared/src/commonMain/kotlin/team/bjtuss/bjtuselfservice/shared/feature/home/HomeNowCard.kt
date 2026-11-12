@@ -40,11 +40,13 @@ import team.bjtuss.bjtuselfservice.shared.domain.course.Course
 import team.bjtuss.bjtuselfservice.shared.domain.course.displayScheduleCourseName
 import team.bjtuss.bjtuselfservice.shared.domain.home.HomeNowSession
 import team.bjtuss.bjtuselfservice.shared.domain.home.pickHomeNowSessions
+import team.bjtuss.bjtuselfservice.shared.domain.time.displaySchoolClockText
 import team.bjtuss.bjtuselfservice.shared.feature.course.CourseDetailContent
 import team.bjtuss.bjtuselfservice.shared.feature.course.courseCategoryAccent
 import team.bjtuss.bjtuselfservice.shared.feature.course.courseColorCategory
 import team.bjtuss.bjtuselfservice.shared.feature.scroll.desktopTouchScroll
 import team.bjtuss.bjtuselfservice.shared.feature.shell.AppleSheet
+import team.bjtuss.bjtuselfservice.shared.feature.shell.sheetBodyScroll
 
 @Composable
 internal fun HomeNowSection(
@@ -82,17 +84,18 @@ internal fun HomeNowSection(
                 session,
                 accent = courseCategoryAccent(category),
                 liveTarget = liveTarget,
+                schoolDate = today,
                 onClick = { selected = session.course },
             )
         }
     }
     selected?.let { course ->
-        AppleSheet(onDismissRequest = { selected = null }, title = "课程详情", scrollableBody = true) {
+        AppleSheet(onDismissRequest = { selected = null }, title = "课程详情") {
             val detailScroll = rememberScrollState()
             CourseDetailContent(
                 course,
                 schedule.staggeredClassTimes,
-                Modifier.fillMaxWidth().verticalScroll(detailScroll).desktopTouchScroll(detailScroll)
+                Modifier.fillMaxWidth().sheetBodyScroll(detailScroll)
                     .padding(horizontal = 24.dp, vertical = 8.dp).padding(bottom = 20.dp),
             )
         }
@@ -107,6 +110,7 @@ internal fun HomeNowCard(
     onClick: () -> Unit,
     /** iOS 实时活动（灵动岛）的 Live 按钮；其余平台不显示。 */
     liveTarget: LiveActivityTarget? = null,
+    schoolDate: kotlinx.datetime.LocalDate = team.bjtuss.bjtuselfservice.shared.domain.time.schoolNow().date,
 ) {
     val scheme = MaterialTheme.colorScheme
     val status = when {
@@ -172,7 +176,7 @@ internal fun HomeNowCard(
                 }
                 if (session.timeRange.isNotBlank()) {
                     Text(
-                        session.timeRange,
+                        displaySchoolClockText(session.timeRange, schoolDate),
                         style = MaterialTheme.typography.bodySmall,
                         color = scheme.onSurfaceVariant,
                     )

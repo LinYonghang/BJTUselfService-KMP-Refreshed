@@ -100,6 +100,11 @@ import kotlinx.datetime.plus
 import kotlinx.datetime.toInstant
 import kotlinx.datetime.toLocalDateTime
 import team.bjtuss.bjtuselfservice.shared.domain.homework.parseSchoolLocalDateTime
+import team.bjtuss.bjtuselfservice.shared.domain.home.phyVlabEventHasInstant
+import team.bjtuss.bjtuselfservice.shared.domain.time.SchoolTimeZone
+import team.bjtuss.bjtuselfservice.shared.domain.time.displaySchoolClockText
+import team.bjtuss.bjtuselfservice.shared.domain.time.displayTimeZone
+import team.bjtuss.bjtuselfservice.shared.domain.time.schoolEpochSeconds
 import kotlinx.coroutines.flow.collect
 import kotlin.time.Instant
 import team.bjtuss.bjtuselfservice.shared.PlatformFamily
@@ -134,6 +139,7 @@ import team.bjtuss.bjtuselfservice.shared.feature.course.courseWeekScrollNavigat
 import team.bjtuss.bjtuselfservice.shared.domain.home.HOME_MAX_TEACHING_WEEK
 import team.bjtuss.bjtuselfservice.shared.domain.home.resolveHomeAgendaWeekStart
 import team.bjtuss.bjtuselfservice.shared.feature.scroll.desktopTouchScroll
+import team.bjtuss.bjtuselfservice.shared.feature.shell.sheetBodyScroll
 
 @Composable
 fun HomeWorkspace(
@@ -170,6 +176,7 @@ fun HomeWorkspace(
     modifier: Modifier = Modifier,
     /** 未经作业页筛选的来源数据，仅用于把截止提醒关联到本地完成标记。 */
     reminderAssignments: List<team.bjtuss.bjtuselfservice.shared.feature.assignment.AggregatedAssignment> = emptyList(),
+    nowInstant: Instant = now.toInstant(timeZone),
 ) {
     val state by model.state.collectAsState()
     val pageListState = rememberLazyListState()
@@ -207,24 +214,24 @@ fun HomeWorkspace(
         )
     }
     selectedChangeCourse?.let { course ->
-        AppleSheet(onDismissRequest = { selectedChangeCourse = null }, title = "课程详情", scrollableBody = true) {
+        AppleSheet(onDismissRequest = { selectedChangeCourse = null }, title = "课程详情") {
             val detailScroll = rememberScrollState()
             CourseDetailContent(
                 course,
                 homeSchedule.staggeredClassTimes,
-                Modifier.fillMaxWidth().verticalScroll(detailScroll).desktopTouchScroll(detailScroll)
+                Modifier.fillMaxWidth().sheetBodyScroll(detailScroll)
                     .padding(horizontal = 24.dp, vertical = 8.dp).padding(bottom = 20.dp),
             )
         }
     }
 
-    // 作业模型每发一次状态都会重取秒级 now；日程只需要分钟精度。截到分钟后，同步期间
-    // now 不再每次都变，各周日程的 remember 才不会在每次重组时整周重算。
+    // 日期/钟面展示保留分钟精度；截止比较另带原始时刻。
+    // 夏令时回拨时两次同名分钟不能共用提醒结果，remember 也必须包含 nowInstant。
     val agendaNow = remember(now.date, now.hour, now.minute) {
         LocalDateTime(now.date, LocalTime(now.hour, now.minute))
     }
-    val reminderAgenda = remember(homework, exams, phyVlabEvents, agendaNow, timeZone) {
-        buildHomeAgenda(homework, exams, agendaNow.date, agendaNow, timeZone, phyVlabEvents)
+    val reminderAgenda = remember(homework, exams, phyVlabEvents, agendaNow, timeZone, nowInstant) {
+        buildHomeAgenda(homework, exams, agendaNow.date, agendaNow, timeZone, phyVlabEvents, nowInstant = nowInstant)
     }
     val reminders = rememberHomeAssignmentReminders(reminderAgenda, reminderAssignments)
     val dueSoonItems = remember(reminders, timeZone) {
@@ -260,7 +267,8 @@ fun HomeWorkspace(
                 }
             }
             item(key = "home-now") {
-                HomeNowSection(timeZone = timeZone)
+                // 正在上/下一节按北京时间的课表算，显示的时刻再换成手机时区。
+                HomeNowSection(timeZone = SchoolTimeZone)
             }
             // 正在进行、48 小时内折扣与截止之后先看数据变动，再看日程窗格。
             // 提醒和变动为空时不建列表项，避免空项在日程上方多出一份间距。
@@ -295,6 +303,7 @@ fun HomeWorkspace(
                         currentWeek = currentWeek,
                         academicWeeks = academicWeeks,
                         now = agendaNow,
+                        nowInstant = nowInstant,
                         timeZone = timeZone,
                         isLoading = isAgendaLoading,
                         expanded = expanded,
@@ -325,6 +334,7 @@ fun HomeWorkspace(
                         currentWeek = currentWeek,
                         academicWeeks = academicWeeks,
                         now = agendaNow,
+                        nowInstant = nowInstant,
                         timeZone = timeZone,
                         isLoading = isAgendaLoading,
                         expanded = expanded,
@@ -368,29 +378,34 @@ internal fun nextAutoFollowedWeekSlot(
 }
 
 /** 首页与课表共用校历时间轴；没有校历时保留旧的 1..30 周兜底。 */
-private fun homeAgendaWeekSlots(
+internal fun homeAgendaWeekSlots(
     currentWeek: Int,
     today: LocalDate,
     academicWeeks: List<OccupancyWeekDate>,
+    schoolToday: LocalDate = today,
 ): List<AcademicWeekSlot> {
     val calendarSlots = academicWeekSlots(academicWeeks, HOME_MAX_TEACHING_WEEK)
-    if (calendarSlots.isEmpty()) {
-        return (1..HOME_MAX_TEACHING_WEEK).map { week ->
+    val datedSlots = if (calendarSlots.isEmpty()) {
+        (1..HOME_MAX_TEACHING_WEEK).map { week ->
             AcademicWeekSlot(
                 teachingWeek = week,
-                startDate = resolveHomeAgendaWeekStart(currentWeek, week, today, academicWeeks),
+                startDate = resolveHomeAgendaWeekStart(currentWeek, week, schoolToday, academicWeeks),
             )
         }
-    }
+    } else calendarSlots
     val todayMonday = mondayOf(today)
-    return if (calendarSlots.any { it.startDate == todayMonday }) {
-        calendarSlots
+    return if (datedSlots.any { it.startDate == todayMonday }) {
+        datedSlots
     } else {
         // 当前日期可能落在校历范围之外；保留这一个自然周，避免首页变成
         // “没有周数”而丢掉当天的作业开始/截止事件。
-        (calendarSlots + AcademicWeekSlot(null, todayMonday)).sortedBy(AcademicWeekSlot::startDate)
+        (datedSlots + AcademicWeekSlot(null, todayMonday)).sortedBy(AcademicWeekSlot::startDate)
     }
 }
+
+/** 首页按当地“今天”选自然周，不能直接使用北京今天的教学周号。 */
+internal fun homeAgendaTodaySlot(slots: List<AcademicWeekSlot>, today: LocalDate): AcademicWeekSlot =
+    slots.firstOrNull { it.startDate == mondayOf(today) } ?: AcademicWeekSlot(null, mondayOf(today))
 
 @Composable
 private fun MailCard(
@@ -507,6 +522,7 @@ private fun HomeAgendaSection(
     academicWeeks: List<OccupancyWeekDate>,
     now: LocalDateTime,
     timeZone: TimeZone,
+    nowInstant: Instant,
     isLoading: Boolean,
     expanded: Boolean,
     /** 周数是否已由本学期校历确认；未确认时首页显示「日程加载中」。 */
@@ -520,19 +536,12 @@ private fun HomeAgendaSection(
     // 校历确认之前不显示任何周数（含缓存值），统一显示「日程加载中」，
     // 拿到确切结果后一次性显示最终周；这样卡片不会随中间值反复弹跳。
     val weekValueIsPending = !isWeekResolved
-    val weekSlots = remember(currentWeek, academicWeeks, today) {
-        homeAgendaWeekSlots(currentWeek, today, academicWeeks)
+    val schoolToday = nowInstant.toLocalDateTime(SchoolTimeZone).date
+    val weekSlots = remember(currentWeek, academicWeeks, today, schoolToday) {
+        homeAgendaWeekSlots(currentWeek, today, academicWeeks, schoolToday)
     }
     val todayMonday = remember(today) { mondayOf(today) }
-    val initialSlot = remember(currentWeek, academicWeeks, today) {
-        when {
-            currentWeek in 1..HOME_MAX_TEACHING_WEEK ->
-                weekSlots.firstOrNull { it.teachingWeek == currentWeek }
-                    ?: AcademicWeekSlot(currentWeek, resolveHomeAgendaWeekStart(currentWeek, currentWeek, today, academicWeeks))
-            else -> weekSlots.firstOrNull { it.startDate == todayMonday }
-                ?: AcademicWeekSlot(null, todayMonday)
-        }
-    }
+    val initialSlot = homeAgendaTodaySlot(weekSlots, today)
     // Keep the first visible week stable while the calendar is still being
     // resolved. Otherwise a changing pager list can reuse the same page index
     // for a different week and look like an unwanted swipe on launch.
@@ -574,13 +583,8 @@ private fun HomeAgendaSection(
     // 登录后/校历刷新可能先给出缓存周，再给出校历校准周；只有用户没有手动选周时，
     // 才让首页自动跟随这个更新，避免把用户正在看的周强行跳回第 1 周。
     // 周数尚未由校历确认时不自动跟随：否则会先跳到中间值、再跳到最终值。
-    val automaticSlot = when {
-        !isWeekResolved -> null
-        currentWeek in 1..HOME_MAX_TEACHING_WEEK ->
-            weekSlots.firstOrNull { it.teachingWeek == currentWeek }
-        else -> weekSlots.firstOrNull { it.startDate == todayMonday }
-    }
-    LaunchedEffect(currentWeek, academicWeeks, isWeekResolved) {
+    val automaticSlot = initialSlot.takeIf { isWeekResolved }
+    LaunchedEffect(automaticSlot, isWeekResolved) {
         nextAutoFollowedWeekSlot(selectedSlot, automaticSlot, weekWasManuallySelected)?.let { slot ->
             selectedSlot = slot
         }
@@ -603,6 +607,7 @@ private fun HomeAgendaSection(
             weekSlot = pendingSlot,
             selectedDate = selectedDateFor(pendingSlot),
             now = now,
+            nowInstant = nowInstant,
             timeZone = timeZone,
             isLoading = isLoading,
             isWeekResolved = isWeekResolved,
@@ -720,6 +725,7 @@ private fun HomeAgendaSection(
                         phyVlabEvents,
                         today,
                         now,
+                        nowInstant,
                         timeZone,
                         weekStartDate,
                         homeSchedule,
@@ -729,10 +735,11 @@ private fun HomeAgendaSection(
                             exams = exams,
                             today = today,
                             now = now,
+                            nowInstant = nowInstant,
                             timeZone = timeZone,
                             phyVlabEvents = phyVlabEvents,
                             weekStartDate = weekStartDate,
-                        ).withCourses(homeSchedule)
+                        ).withCourses(homeSchedule, timeZone)
                     }
                     HomeAgendaCalendarContent(
                         weekSlot = weekSlot,
@@ -848,6 +855,7 @@ private fun HomeAgendaSection(
                             phyVlabEvents,
                             today,
                             now,
+                            nowInstant,
                             timeZone,
                             weekStartDate,
                             homeSchedule,
@@ -857,15 +865,17 @@ private fun HomeAgendaSection(
                                 exams = exams,
                                 today = today,
                                 now = now,
+                                nowInstant = nowInstant,
                                 timeZone = timeZone,
                                 phyVlabEvents = phyVlabEvents,
                                 weekStartDate = weekStartDate,
-                            ).withCourses(homeSchedule)
+                            ).withCourses(homeSchedule, timeZone)
                         }
                         val selectedDay = weekAgenda.days.firstOrNull { it.date == date }
                             ?: weekAgenda.days.first()
                         AgendaSelectedDayContent(
                             day = selectedDay,
+                            timeZone = timeZone,
                             onOpenHomework = onOpenHomeworkDetail,
                             onOpenExams = onOpenExams,
                             onOpenPhyVlab = onOpenPhyVlab,
@@ -897,6 +907,7 @@ private fun HomeAgendaSection(
             weekSlot = selectedSlot,
             selectedDate = selectedDateFor(selectedSlot),
             now = now,
+            nowInstant = nowInstant,
             timeZone = timeZone,
             isLoading = isLoading,
             isWeekResolved = isWeekResolved,
@@ -933,6 +944,7 @@ private fun HomeAgendaWeekCard(
     selectedDate: LocalDate,
     now: LocalDateTime,
     timeZone: TimeZone,
+    nowInstant: Instant,
     isLoading: Boolean,
     /** 周数是否已由本学期校历确认；未确认时明确显示「日程加载中」。 */
     isWeekResolved: Boolean = true,
@@ -956,16 +968,17 @@ private fun HomeAgendaWeekCard(
     val homeSchedule = LocalHomeSchedule.current
     val today = now.date
     val weekStartDate = weekSlot.startDate
-    val weekAgenda = remember(homework, exams, phyVlabEvents, today, now, timeZone, weekStartDate, homeSchedule) {
+    val weekAgenda = remember(homework, exams, phyVlabEvents, today, now, nowInstant, timeZone, weekStartDate, homeSchedule) {
         buildHomeAgenda(
             homework = homework,
             exams = exams,
             today = today,
             now = now,
+            nowInstant = nowInstant,
             timeZone = timeZone,
             phyVlabEvents = phyVlabEvents,
             weekStartDate = weekStartDate,
-        ).withCourses(homeSchedule)
+        ).withCourses(homeSchedule, timeZone)
     }
     val selectedDay = weekAgenda.days.firstOrNull { it.date == selectedDate } ?: weekAgenda.days.first()
 
@@ -1036,6 +1049,7 @@ private fun HomeAgendaWeekCard(
                 val day = weekAgenda.days.firstOrNull { it.date == date } ?: selectedDay
                 AgendaSelectedDayContent(
                     day, onOpenHomework, onOpenExams, onOpenPhyVlab,
+                    timeZone = timeZone,
                     canNavigate = {
                         !dayTransition.isRunning &&
                             dayTransition.currentState == dayTransition.targetState &&
@@ -1161,6 +1175,7 @@ private fun AgendaSelectedDayContent(
     onOpenExams: (ExamSchedule) -> Unit,
     onOpenPhyVlab: (PhyVlabEvent) -> Unit,
     canNavigate: () -> Boolean,
+    timeZone: TimeZone,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
@@ -1168,7 +1183,7 @@ private fun AgendaSelectedDayContent(
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
         )
-        AgendaDayDetails(day, onOpenHomework, onOpenExams, onOpenPhyVlab, canNavigate)
+        AgendaDayDetails(day, onOpenHomework, onOpenExams, onOpenPhyVlab, canNavigate, timeZone)
     }
 }
 
@@ -1234,7 +1249,7 @@ private fun dueSoonSummaryItems(
 ): List<DueSoonSummaryItem> {
     val homeworkItems = homework.map { item ->
         DueSoonSummaryItem(
-            sortKey = parseSchoolLocalDateTime(item.endTime)?.toInstant(timeZone)?.epochSeconds ?: Long.MAX_VALUE,
+            sortKey = parseSchoolLocalDateTime(item.endTime)?.schoolEpochSeconds() ?: Long.MAX_VALUE,
             text = "${displayScheduleCourseName(item.courseName)} · ${item.title} · ${formatSchoolDeadline(item.endTime)}",
         )
     }
@@ -1453,8 +1468,9 @@ private fun AgendaDayDetails(
     onOpenExams: (ExamSchedule) -> Unit,
     onOpenPhyVlab: (PhyVlabEvent) -> Unit,
     canNavigate: () -> Boolean,
+    timeZone: TimeZone,
 ) {
-    var selectedCourse by remember(day.date) { mutableStateOf<Course?>(null) }
+    var selectedCourse by remember(day.date) { mutableStateOf<HomeCourseOccurrence?>(null) }
     val staggered = LocalHomeSchedule.current.staggeredClassTimes
     if (day.eventCount == 0) {
         Text("当天没有课程、作业、考试或物理在线安排。", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1475,7 +1491,7 @@ private fun AgendaDayDetails(
             )
         }
         day.exams.forEach { exam ->
-            AgendaEventRow("考试", displayScheduleCourseName(exam.courseName), exam.examTimeAndPlace, { onOpenExams(exam) }, canNavigate)
+            AgendaEventRow("考试", displayScheduleCourseName(exam.courseName), team.bjtuss.bjtuselfservice.shared.domain.exam.displayExamTimeAndPlace(exam.examTimeAndPlace), { onOpenExams(exam) }, canNavigate)
         }
         day.phyVlabEvents.forEach { event ->
             AgendaEventRow(
@@ -1493,23 +1509,28 @@ private fun AgendaDayDetails(
                 done = event.submitted,
             )
         }
-        if (day.physicsLabCourses.isNotEmpty()) {
+        // 课程与实验已按手机日期归到这一天；时刻按各自的北京日期换算，不再标“前日/次日”。
+        val homeSchedule = LocalHomeSchedule.current
+        val labOccurrences = remember(homeSchedule, day.date, timeZone) { homePhysicsLabOccurrencesOnLocalDate(homeSchedule, day.date, timeZone) }
+        val courseOccurrences = remember(homeSchedule, day.date, timeZone) { homeCourseOccurrencesOnLocalDate(homeSchedule, day.date, timeZone) }
+        if (labOccurrences.isNotEmpty()) {
             Text("当天实验", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
-            day.physicsLabCourses.forEach { lab ->
+            labOccurrences.forEach { (lab, schoolDate) ->
                 AgendaEventRow(
                     type = "实验",
                     title = lab.copy(courseName = lab.courseName.removeSuffix("（实验）")).displayTitleWithTeacher(),
-                    detail = listOf(lab.scheduleEventTime.orEmpty(), team.bjtuss.bjtuselfservice.shared.domain.course.displayCoursePlace(lab.coursePlace))
+                    detail = listOf(lab.scheduleEventTime.orEmpty().let { displaySchoolClockText(it, schoolDate, timeZone, markDayShift = false) }, team.bjtuss.bjtuselfservice.shared.domain.course.displayCoursePlace(lab.coursePlace))
                         .filter(String::isNotBlank).joinToString(" · "),
-                    onClick = { selectedCourse = lab },
+                    onClick = { selectedCourse = HomeCourseOccurrence(lab, schoolDate) },
                     canNavigate = canNavigate,
                 )
             }
         }
-        if (day.courses.isNotEmpty()) {
+        if (courseOccurrences.isNotEmpty()) {
             Text("当天课表", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
-            day.courses.forEach { course ->
-                val time = course.classTimeRange(staggered)?.replace('-', '–').orEmpty()
+            courseOccurrences.forEach { (course, schoolDate) ->
+                val time = course.classTimeRange(staggered)?.replace('-', '–')
+                    ?.let { displaySchoolClockText(it, schoolDate, timeZone, markDayShift = false) }.orEmpty()
                 AgendaEventRow(
                     type = "课程",
                     markColor = team.bjtuss.bjtuselfservice.shared.feature.course.courseCategoryAccent(
@@ -1519,21 +1540,22 @@ private fun AgendaDayDetails(
                     ),
                     title = course.displayTitleWithTeacher(),
                     detail = listOf(time, team.bjtuss.bjtuselfservice.shared.domain.course.displayCoursePlace(course.coursePlace)).filter(String::isNotBlank).joinToString(" · "),
-                    onClick = { selectedCourse = course },
+                    onClick = { selectedCourse = HomeCourseOccurrence(course, schoolDate) },
                     canNavigate = canNavigate,
                 )
             }
         }
 
     }
-    selectedCourse?.let { course ->
-        AppleSheet(onDismissRequest = { selectedCourse = null }, title = "课程详情", scrollableBody = true) {
+    selectedCourse?.let { (course, schoolDate) ->
+        AppleSheet(onDismissRequest = { selectedCourse = null }, title = "课程详情") {
             val detailScroll = rememberScrollState()
             CourseDetailContent(
                 course,
                 staggered,
-                Modifier.fillMaxWidth().verticalScroll(detailScroll).desktopTouchScroll(detailScroll)
+                Modifier.fillMaxWidth().sheetBodyScroll(detailScroll)
                     .padding(horizontal = 24.dp, vertical = 8.dp).padding(bottom = 20.dp),
+                schoolDate = schoolDate,
             )
         }
     }
@@ -1594,14 +1616,16 @@ private fun weekdayName(date: LocalDate): String = "星期${weekdayShortName(dat
 
 private fun formatPhyVlabAgendaDate(event: PhyVlabEvent): String {
     // 由作业截止生成的事件（物理在线活动、CITEL）：零点截止显示为前一天 24:00，与它所在的日程日一致。
+    // 带真实时刻的事件按手机时区显示；Moodle 日历格子的日期标记仍按北京时间那天。
+    val zone = if (phyVlabEventHasInstant(event)) displayTimeZone() else SchoolTimeZone
     if (event.kind == PhyVlabEventKind.DEADLINE || event.kind == PhyVlabEventKind.DISCOUNT) {
-        val shown = deadlineDisplay(Instant.fromEpochSeconds(event.dayTimestamp).toLocalDateTime(TimeZone.of("Asia/Shanghai")))
+        val shown = deadlineDisplay(Instant.fromEpochSeconds(event.dayTimestamp).toLocalDateTime(zone))
         return "${shown.date} ${shown.clock} · ${shown.date.dayOfWeek.chineseLabel()}"
     }
     if (Regex("·\\s*周[一二三四五六日]").containsMatchIn(event.dateText)) return event.dateText
     val weekday = runCatching {
         Instant.fromEpochSeconds(event.dayTimestamp)
-            .toLocalDateTime(TimeZone.of("Asia/Shanghai"))
+            .toLocalDateTime(zone)
             .date
     }.getOrNull()?.let { date -> "周${weekdayShortName(date)}" }
     return if (weekday == null || event.dateText.isBlank()) {
@@ -1693,19 +1717,14 @@ internal fun ChangeRecordsSheet(
         confirmLabel = if (isIos) actionLabel else null,
         onConfirm = if (isIos) onAction else null,
         dismissLabel = if (isIos) null else "关闭",
-        needsFullHeight = false,
-        scrollableBody = true,
     ) {
         if (isIos) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f)
-                    // 留白放在滚动区外：iOS 26 标题栏的玻璃按钮比栏底更低，
-                    // 内容滚上去时在按钮下方被裁掉，不再钻到按钮底下。
+                    // iOS 26 标题栏的玻璃按钮比栏底更低，正文顶部让开它。
                     .padding(top = IosChangeSheetHeaderClearance)
-                    .verticalScroll(changeScrollState)
-                    .desktopTouchScroll(changeScrollState)
+                    .sheetBodyScroll(changeScrollState)
                     .sheetScrollContentPadding(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {

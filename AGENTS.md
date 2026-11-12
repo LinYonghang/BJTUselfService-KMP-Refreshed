@@ -9,14 +9,16 @@
 | `AGENTS.md`       | 原则         | 人工维护               | 协作方式、仓库事实、架构边界、平台能力、安全红线、设计、测试、交付规则 | 进度、版本状态、验证结果、日期性事件   |
 | `memory.md`       | 实时工作记忆 | 每次任务结束时更新     | 顶部摘要、进行中的事项、当前痛点、接下来要做的事                       | 已经合入/发布的完成细节（移入日志）    |
 | `history_full.md` | 工作日志     | 一项工作合入或发版时追加 | 按日期追加的条目：做了什么、为什么、验证命令与结果、实机现象、未验证边界、决策 | 待办与计划                             |
+| `DESIGN.md`       | 设计规范     | 人工维护（AI 仅在用户要求时修改） | 外观与交互规则：液态玻璃顶栏、按钮放置与样式、弹层、颜色、动效、状态、自查清单 | 进度、验证结果                         |
 
 **读写顺序**：
 
 - 任务开始前：读 `AGENTS.md` → `memory.md`；`history_full.md` 不通读，只用 `rg` 查同类问题、同一功能的既往结论与证据。
 - 任务进行中：未合入的改动只记在 `memory.md`“进行中”。
 - 一项工作合入 `main`（PR 合并）或发出版本后：把对应内容从 `memory.md` 移出，在 `history_full.md` **末尾**追加一条日志；不改写旧条目（事实错误时追加更正条目）。
-- `AGENTS.md` 由人工维护；AI 只在用户要求时修改，改动前后向用户说明。
-- `docs/migration/`、`docs/security/` 等是当时的专题报告，可作参考，但不代表当前状态。
+- 任何涉及界面外观或交互的任务（新页面、新按钮、弹层、配色、动效），开始前必须读完 `DESIGN.md`，按其规则实现，并在 PR 描述里回答它第 14 节的自查清单。
+- `AGENTS.md`、`DESIGN.md` 由人工维护；AI 只在用户要求时修改，改动前后向用户说明。
+- `docs/` 目录结构与索引见 `docs/README.md`；`docs/archive/`（含 `migration/` 等）及历史安全审计报告是当时的专题记录，可作参考，但不代表当前状态。
 
 **日志条目格式**（`history_full.md`）：
 
@@ -33,7 +35,7 @@
 
 ## 开始任何任务前
 
-1. 按上表读 `AGENTS.md`、`memory.md`，按需检索 `history_full.md`。
+1. 按上表读 `AGENTS.md`、`memory.md`，按需检索 `history_full.md`；涉及界面时再读 `DESIGN.md`。
 2. 运行 `git status --short` 和 `git branch --show-current`，识别并保护用户已有改动；需要最新代码时先 `git pull --ff-only`。
 3. 阅读即将修改文件的调用链和对应测试，不只阅读目标函数。
 4. 明确本次涉及哪些平台、验收命令是什么。
@@ -53,6 +55,7 @@
 - 技术栈：Kotlin Multiplatform + Compose Multiplatform/Material 3；Ktor；Ksoup 解析 HTML；`kotlinx.serialization`；SQLDelight 缓存；凭据走 Android Keystore / Apple Keychain / macOS `MacOsSecretBag` / Windows DPAPI；各端都不再内置验证码识别模型（统一用 `UnavailableCaptchaRecognizer`），需要验证码时显示图片、由用户手动输入。MIS 统一认证默认免验证码，旧的数字算式验证码已不再出现，新的字母验证码原有模型识别不了；Android ONNX（`BJTUCaptcha.onnx`）与 iOS/macOS Core ML（`BJTUCaptcha.mlpackage`）模型已于 1.8.6（PR #45）移除，同样可从存档标签 `archive/legacy-android-and-captcha-model` 取回。
 - Android 签名：本机（Windows）的上传密钥在 `C:\Users\zjg\.android\bjtu-kmp-upload.keystore`；`androidApp/build.gradle.kts` 默认也找 `~/.android/bjtu-kmp-upload.keystore`，可用环境变量 `BJTU_ANDROID_KEYSTORE` 覆盖。密钥口令不写进仓库：放环境变量 `BJTU_ANDROID_STORE_PASSWORD` / `BJTU_ANDROID_KEY_ALIAS` / `BJTU_ANDROID_KEY_PASSWORD`，或 `~/.gradle/gradle.properties` 的 `bjtuAndroidStorePassword` / `bjtuAndroidKeyAlias` / `bjtuAndroidKeyPassword`（CI 用同名 GitHub Secrets）。没有口令就编不了 Android 包；只在模拟器上验证时可以临时用 `~/.android/debug.keystore`（口令 `android`、别名 `androiddebugkey`），但那包不能覆盖安装正式版。
 - 本机验证产物（截图、导出、诊断日志）放忽略目录 `.artifacts/`，不进 Git。
+- 需要新建工作树时，统一放在仓库根目录 `.artifacts/tree/<app名称>/` 下，例如 Codex 使用 `.artifacts/tree/codex/`，Claude、WorkBuddy 分别使用 `.artifacts/tree/claude/`、`.artifacts/tree/workbuddy/`；每项任务再建独立子目录。
 
 ## 工作方式
 
@@ -151,6 +154,18 @@
 
 ## Compose Multiplatform UI 规则
 
+### 必须遵循 `DESIGN.md`
+
+完整的外观与交互规范在仓库根目录 `DESIGN.md`，本节只列最常被忽略、返工最多的硬性要求。不确定时以 `DESIGN.md` 为准；`DESIGN.md` 没写到的新情况先问用户，不要自行发挥。
+
+- **新功能页面必须接入 iOS 液态玻璃顶栏**：`nativeRouteTitle()` 返回标题；`DestinationPage(scrollUnderTopBar = true)`；主滚动容器用 `TopScrollLazyColumn` / `TopScrollColumn`；顶/底留白取 `LocalTopBarClearance` / `LocalBottomBarClearance`，加在 `contentPadding` 上，不加在布局上。内容从屏幕顶开始画、滚动时穿到栏后，玻璃随滚动出现；顶栏下出现纯色白条即不合格。
+- **顶栏按钮只用声明式参数**（`refreshable`、`idleStatusText`/`onStatusClick`、`topBarActionLabel`/`onTopBarActionClick`、`search`），由 iOS 宿主画成系统圆形液态玻璃按钮（`UIBarButtonItem` + SF Symbol）；禁止传 `topBarAction = { Composable }`，它会让整条顶栏退回 Compose 自绘、丢掉玻璃。每页至多一个页面级动作；新动作要在 `ContentView.swift` 的 `symbolName(for:kind:)` 配图标。Android/桌面回退顶栏复用 `CompactAppTopBar` 的 32.dp 圆形按钮。
+- **不在 Compose 里仿造系统外观**：不画顶栏渐变/模糊/分隔线，不仿玻璃按钮，不在玻璃按钮里套胶囊，不设 `sharesBackground = false`；页面不再画自己的标题行和返回箭头。
+- **弹层先选类型**：一句话的确认/警告/结果用 `AppleAlert`（iOS 系统警告框，破坏性按钮用 `Destructive`）；有内容（详情、列表、勾选、输入、二维码）用 `AppleSheet` / `AppleSheetOrAlert`，标题与确认/取消/关闭放原生 sheet 标题栏，正文不画外壳。iOS sheet 一律按正文测高，不直接开半屏/全屏；正文滚动用 `sheetBodyScroll`（不直接写 `verticalScroll`），只有正文本身是懒加载列表或整页工作区才 `scrollableBody = true`。业务页不直接用 `AlertDialog` / `ModalBottomSheet`。
+- **底部不截断**：页面和 sheet 的滚动视口都一直到底边，底部安全区/底栏净空只作为滚动内容末尾的留白（`LocalBottomBarClearance` 加在 `contentPadding` 上）；禁止在视口外加底部 padding 或 `heightIn(max)` 限高，否则滑动时内容在离底边一条处被硬切掉。
+- **不用下拉刷新**（刷新是顶栏圆形按钮）；页面内切换当前项（版本、课程、邮箱文件夹）优先用 `AppleMenuPickerCard`（iOS 弹系统 `UIMenu`），遵循 `DESIGN.md` 6.1 例外（2–3 个选项用分段控件 `AppleSegmentedControl`，需要搜索才用 sheet）；长列表回顶复用 `AssignmentListWithScrollToTop`（iOS 原生液态玻璃按钮）；批量/持续操作用浮动胶囊操作条，不用铺满底部的实心底栏；页头作为列表首项随内容滚动，不做固定头部。
+- 界面改动的 PR 必须回答 `DESIGN.md` 第 14 节的自查清单，并在 iOS 模拟器上实际看过顶栏玻璃（顶部透明、上滑出现、短页回弹也出现）。
+
 ### 共享而不强求相同
 
 - 共享设计语言、状态和核心组件，按窗口宽度、输入方式和平台习惯调整导航。
@@ -233,21 +248,8 @@
 - 发版时单独核对版本号（见“仓库事实”中的清单）、提交范围、测试、构建矩阵和发布说明，等待用户批准。
 - 每次交付说明：完成的行为、修改文件、验证命令、未验证边界和下一步。
 
-## Cursor Cloud specific instructions
+## Android 与云端环境约定
 
-Linux Cloud Agent 使用镜像自带的 JDK 21（`/usr/lib/jvm/java-21-openjdk-amd64`）。环境安装把 Android SDK 放在 `/opt/android-sdk`，并写入已 gitignore 的 `multiplatform/local.properties`（`sdk.dir`）。`adb`、`emulator`、`sdkmanager` 链接在 `/usr/local/bin`。
-
-Android 调试包需要签名。安装脚本在 `~/.android/bjtu-kmp-upload.keystore` 生成一次性编译密钥，口令只写在 `~/.gradle/gradle.properties`。这不是发布用上传密钥，打出来的包不能覆盖安装正式版。
-
-在 `multiplatform/` 下验证：
-
-- `./gradlew :shared:desktopTest`：共享 JVM 测试。
-- `./gradlew :androidApp:assembleDebug`：默认只打 `arm64-v8a` debug APK。
-- 模拟器是 x86_64。要装进模拟器时先设置 `BJTU_ANDROID_ABIS=x86_64` 再执行 `assembleDebug`。
-- `multiplatform/remote-site-template`：`npm test`。镜像已有 Node 22，该目录没有 npm 依赖，不需要 `npm install`。
-
-模拟器系统镜像是 `system-images;android-36;google_apis;x86_64`。这台宿主上嵌套 KVM 创建 vCPU 会触发内核错误，模拟器必须加 `-accel off`（软件 CPU）。首次开机很慢，不要放进每次启动都会跑的 `start`。
-
-此 Linux 镜像不能构建 iOS（需要 Xcode）、macOS 桌面包（`desktopApp` 依赖 Apple Silicon Skiko）或 Windows MSI。不要在 Linux 上执行 `:desktopApp:run`。iOS 原生目标会被自动禁用；用户级 `~/.gradle/gradle.properties` 可设 `kotlin.native.ignoreDisabledTargets=true`，不要为此改仓库里的 `gradle.properties`。
-
-未获用户针对该次登录的明确要求时，不要在 Cloud Agent 里向学校统一认证提交账号密码。
+- **Android ABI 与模拟器打包**：`:androidApp:assembleDebug` 默认只打 `arm64-v8a`；面向 `x86_64` 模拟器构建时，先设置环境变量 `BJTU_ANDROID_ABIS=x86_64` 再执行 `assembleDebug`。
+- **Windows 本机 Android 环境**：SDK 位于 `C:\Users\zjg\Android\Sdk`（`ANDROID_HOME` 及 `multiplatform/local.properties` 的 `sdk.dir`）。本机唯一项目 AVD 为 `BJTU-API36-x86_64`（Pixel 7a，Android 36 Google APIs x86_64，位于 `C:\Users\zjg\.android\avd`）；命令行启动使用 `emulator.exe -avd BJTU-API36-x86_64 -gpu swiftshader -feature -Vulkan -no-snapshot`（无窗口加 `-no-window -no-audio`），ADB 命令显式带 `-s <序列号>`。清理构建缓存只清仓库内 `build/`，不删 `.avd` 目录。
+- **Linux Cloud Agent 环境**：使用镜像 JDK 21（`/usr/lib/jvm/java-21-openjdk-amd64`）与 `/opt/android-sdk`；`~/.android/bjtu-kmp-upload.keystore` 为环境生成的一次性编译密钥（非正式发布密钥）。模拟器需加 `-accel off`（禁用嵌套 KVM）。`multiplatform/remote-site-template` 直接运行 `npm test`（无需 `npm install`）。该 Linux 镜像不能构建 iOS、macOS 桌面包或 Windows MSI（可在 `~/.gradle/gradle.properties` 设 `kotlin.native.ignoreDisabledTargets=true`，不改仓库配置）。未获用户当次明确要求时，不在 Cloud Agent 中提交学校账号密码。

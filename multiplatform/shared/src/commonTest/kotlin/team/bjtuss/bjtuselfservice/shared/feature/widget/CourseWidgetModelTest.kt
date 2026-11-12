@@ -35,6 +35,34 @@ class CourseWidgetModelTest {
     private fun ready(snapshot: CourseWidgetSnapshot, now: LocalDateTime) =
         assertIs<CourseWidgetState.Ready>(courseWidgetState(snapshot, now)).model
 
+    @Test fun convertedClocksUseOccurrenceDateAcrossBothDstTransitions() {
+        val zone = kotlinx.datetime.TimeZone.of("America/New_York")
+        assertEquals("前日 20:00", widgetClock(480, LocalDate(2026, 10, 31), zone))
+        assertEquals("前日 19:00", widgetClock(480, LocalDate(2026, 11, 2), zone))
+        assertEquals("前日 19:00", widgetClock(480, LocalDate(2026, 3, 7), zone))
+        assertEquals("前日 20:00", widgetClock(480, LocalDate(2026, 3, 9), zone))
+        assertEquals("前日\n19:00", widgetClock(480, LocalDate(2026, 11, 2), zone, "\n"))
+        assertEquals("08:00", widgetClock(480, monday, team.bjtuss.bjtuselfservice.shared.domain.time.SchoolTimeZone))
+        val occurrence = WidgetOccurrence(session("早课", 480, 590), LocalDate(2026, 11, 2))
+        assertEquals("前日 19:00 - 前日 20:50", occurrence.timeRange(zone))
+        assertEquals("次日 01:00", widgetClock(1200, LocalDate(2026, 11, 2), kotlinx.datetime.TimeZone.of("Pacific/Auckland")))
+    }
+
+    @Test fun crossDstWeekMovesClocksIntoOccurrencesInsteadOfSharingAnIncorrectAxis() {
+        val zone = kotlinx.datetime.TimeZone.of("America/New_York")
+        val first = LocalDate(2026, 10, 26)
+        val days = (0..6).map { offset ->
+            val date = first.plus(offset, DateTimeUnit.DAY)
+            WidgetDayPlan(date, 7, listOf(WidgetOccurrence(session("下午课", 850, 960), date)))
+        }
+        val now = LocalDateTime(2026, 10, 26, 12, 0)
+        val model = CourseWidgetDisplayModel(now, days.first(), null, days, parseSlots(null))
+        assertTrue(WidgetWeekLayout(model, zone).showOccurrenceTimes)
+        assertFalse(WidgetWeekLayout(model, team.bjtuss.bjtuselfservice.shared.domain.time.SchoolTimeZone).showOccurrenceTimes)
+        assertEquals("02:10", widgetClock(850, days.first().date, zone))
+        assertEquals("01:10", widgetClock(850, days.last().date, zone))
+    }
+
     @Test fun missingOrOutdatedSnapshotsAreReported() {
         assertEquals(CourseWidgetState.SignedOut, courseWidgetState(null, at(0, 9, 0)))
         assertEquals(CourseWidgetState.Stale, courseWidgetState(snapshot(), at(30, 9, 0)))

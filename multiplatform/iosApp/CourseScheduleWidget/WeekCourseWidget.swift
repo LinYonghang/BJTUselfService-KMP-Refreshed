@@ -58,6 +58,7 @@ struct WeekLayout {
     let slots: [ClosedRange<Int>]
     let blocks: [WeekBlock]
     let todayColumn: Int?
+    let showOccurrenceTimes: Bool
 
     init(model: CourseWidgetModel) {
         let calendar = CourseWidgetCalendar.calendar
@@ -105,6 +106,9 @@ struct WeekLayout {
             blocks += dayBlocks
         }
 
+        self.showOccurrenceTimes = !CourseWidgetCalendar.clocksAreUniform(
+            minutes: slots.flatMap { [$0.lowerBound, $0.upperBound] }, dates: days.map(\.date)
+        )
         self.days = days
         self.rows = rows
         self.slots = slots
@@ -150,7 +154,7 @@ private struct WeekGrid: View {
                 }
 
                 ForEach(Array(layout.rows.enumerated()), id: \.offset) { row, slot in
-                    SlotLabel(index: slot, range: layout.slots[slot], compact: rowHeight < 34)
+                    SlotLabel(index: slot, range: layout.slots[slot], schoolDate: layout.days.first?.date ?? now, showClocks: !layout.showOccurrenceTimes, compact: rowHeight < 34)
                         .frame(width: axisWidth, height: rowHeight)
                         .offset(y: headerHeight + gap + CGFloat(row) * (rowHeight + gap))
                 }
@@ -161,7 +165,7 @@ private struct WeekGrid: View {
                     // 错峰课不多占一行：顶边微微下移，底边越过行间空隙一半，读起来是“稍晚开始、稍晚结束”。
                     let shift: CGFloat = block.occurrence.session.isStaggered ? min(rowHeight * 0.125, 6) : 0
                     let overhang: CGFloat = shift > 0 ? min(shift, gap / 2) : 0
-                    WeekCourseCell(occurrence: block.occurrence, now: now, narrow: block.laneCount > 1)
+                    WeekCourseCell(occurrence: block.occurrence, now: now, narrow: block.laneCount > 1, showTime: layout.showOccurrenceTimes)
                         .frame(width: laneWidth, height: rows * rowHeight + (rows - 1) * gap - shift + overhang)
                         .offset(
                             x: axisWidth + gap + CGFloat(block.column) * (columnWidth + gap) + CGFloat(block.lane) * (laneWidth + gap),
@@ -216,22 +220,27 @@ private struct DayHeader: View {
 private struct SlotLabel: View {
     let index: Int
     let range: ClosedRange<Int>
+    let schoolDate: Date
+    let showClocks: Bool
     let compact: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             Text("\(index + 1)")
                 .font(.system(size: 13, weight: .semibold).monospacedDigit())
-            Text(String(format: "%02d:%02d", range.lowerBound / 60, range.lowerBound % 60))
-                .font(.system(size: 8).monospacedDigit())
-                .foregroundStyle(.secondary)
-            if !compact {
-                Text(String(format: "%02d:%02d", range.upperBound / 60, range.upperBound % 60))
+            // 周内当地时刻不一致时，轴只显示节次，课程格显示各自真实时刻。
+            if showClocks {
+                Text(CourseWidgetCalendar.displayClock(minute: range.lowerBound, on: schoolDate, markerSeparator: "\n"))
                     .font(.system(size: 8).monospacedDigit())
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
+                if !compact {
+                    Text(CourseWidgetCalendar.displayClock(minute: range.upperBound, on: schoolDate, markerSeparator: "\n"))
+                        .font(.system(size: 8).monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
             }
         }
-        .lineLimit(1)
+        .lineLimit(2)
         .minimumScaleFactor(0.8)
     }
 }
@@ -241,6 +250,7 @@ private struct WeekCourseCell: View {
     let occurrence: CourseOccurrence
     let now: Date
     let narrow: Bool
+    var showTime = false
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -248,9 +258,15 @@ private struct WeekCourseCell: View {
         let ongoing = occurrence.isOngoing(at: now)
         let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
         VStack(alignment: .leading, spacing: 2) {
+            if showTime {
+                Text(CourseWidgetCalendar.displayClock(occurrence.start, schoolDate: occurrence.start, markerSeparator: "\n"))
+                    .font(.system(size: 7).monospacedDigit())
+                    .lineLimit(2)
+                    .layoutPriority(1)
+            }
             Text(occurrence.session.name)
                 .font(.system(size: narrow ? 9 : 10.5, weight: .semibold))
-                .lineLimit(4)
+                .lineLimit(showTime ? 1 : 4)
                 .layoutPriority(1)
             if !occurrence.session.place.isEmpty {
                 Text(occurrence.session.place)

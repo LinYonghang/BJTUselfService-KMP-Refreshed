@@ -21,6 +21,9 @@ import team.bjtuss.bjtuselfservice.shared.credentialFieldKeyboardAvoidance
 import team.bjtuss.bjtuselfservice.shared.platformLoginKeyboardAvoidance
 import team.bjtuss.bjtuselfservice.shared.feature.scroll.desktopTouchScroll
 import team.bjtuss.bjtuselfservice.shared.feature.shell.*
+import team.bjtuss.bjtuselfservice.shared.feature.shell.AppleAlert
+import team.bjtuss.bjtuselfservice.shared.feature.shell.AppleAlertAction
+import team.bjtuss.bjtuselfservice.shared.feature.shell.AppleAlertRole
 
 @Composable
 internal fun IndependentAccountSettings(
@@ -29,6 +32,7 @@ internal fun IndependentAccountSettings(
     message: String?, failed: Boolean = false, modifier: Modifier = Modifier,
     websiteUrl: String? = null,
     websiteRedirectUrl: String? = null,
+    backupWebsiteUrl: String? = null,
     onClear: (() -> Unit)? = null,
     canClear: Boolean = hasSavedPassword,
 ) {
@@ -54,6 +58,14 @@ internal fun IndependentAccountSettings(
                         Text(websiteRedirectUrl)
                     }
                     Text("）", style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+        backupWebsiteUrl?.let { url ->
+            Column {
+                Text("主网站无法访问时，可使用备用入口（需要校园网）。同步会自动尝试备用路径。HTTP 明文传输账号、密码和实验数据，请仅在可信校园网使用。", style = MaterialTheme.typography.bodyMedium)
+                TextButton(onClick = { uriHandler.openUri(url) }, contentPadding = PaddingValues(0.dp)) {
+                    Text("备用入口：$url")
                 }
             }
         }
@@ -97,14 +109,14 @@ internal fun IndependentAccountSettings(
 
 @Composable
 internal fun ClearIndependentAccountDialog(onDismiss: () -> Unit, onClear: () -> Unit) {
-    AlertDialog(
+    AppleAlert(
+        title = "清除配置信息？",
+        message = "将清除已保存的密码并关闭此功能，账号将保留。重新配置账号和密码后才能开启。",
+        actions = listOf(
+            AppleAlertAction("取消", AppleAlertRole.Cancel, onClick = onDismiss),
+            AppleAlertAction("清除", AppleAlertRole.Destructive, onClick = onClear),
+        ),
         onDismissRequest = onDismiss,
-        title = { Text("清除配置信息？") },
-        text = { Text("将清除已保存的密码并关闭此功能，账号将保留。重新配置账号和密码后才能开启。") },
-        confirmButton = {
-            TextButton(onClick = onClear) { Text("清除", color = MaterialTheme.colorScheme.error) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
 }
 

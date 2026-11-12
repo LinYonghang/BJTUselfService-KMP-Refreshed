@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.text.selection.SelectionContainer
 import team.bjtuss.bjtuselfservice.shared.domain.homework.HomeworkFileContent
+import team.bjtuss.bjtuselfservice.shared.domain.homework.deadlineInScope
 import team.bjtuss.bjtuselfservice.shared.files.CoursewareDirectoryGateway
 import team.bjtuss.bjtuselfservice.shared.files.UnavailableCoursewareDirectoryGateway
 import team.bjtuss.bjtuselfservice.shared.files.HomeworkFileSaveResult
@@ -63,7 +64,7 @@ fun CitelWorkspace(model: CitelModel, holdNetwork: Boolean, onOpen: (String) -> 
     val scroll = rememberLazyListState()
     val completion = assignmentCompletionState()
     val (tasks, ignoredTasks) = partitionIgnoredAssignments(
-        filteredCitelTasks(state.tasks.filter { selectedCourses.isEmpty() || it.courseId in selectedCourses }, pendingOnly, hideExpired, null, sortOrder, now),
+        filteredCitelTasks(state.tasks.filter { selectedCourses.isEmpty() || it.courseId in selectedCourses }, pendingOnly, hideExpired, null, sortOrder, now, filters.untilEpoch),
         completion.completedKeys, { it.completed }, { it.completionKey() })
     var ignoredExpanded by rememberIgnoredSectionExpanded()
     val topClearance = LocalTopBarClearance.current
@@ -72,30 +73,32 @@ fun CitelWorkspace(model: CitelModel, holdNetwork: Boolean, onOpen: (String) -> 
     val subtitle = (if (dueSoon > 0) "未来 48 小时内有 $dueSoon 项未提交" else "未来 48 小时内暂无临近截止项") +
         if (filters.active) " · 已筛选" else ""
     LaunchedEffect(filters) { scroll.scrollToItem(0) }
-    TopScrollLazyColumn(state = scroll, modifier = modifier.fillMaxSize().desktopTouchScroll(scroll),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp + topClearance,
-            bottom = 24.dp + bottomClearance), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (completion.failure != null) item("completion-error") { AssignmentCompletionFeedback() }
-        state.message?.takeIf { state.failed }?.let { message ->
-            item { AppErrorBanner(message, onRetry = { scope.launch { model.refresh() } }) }
-        }
-        item {
-            HomeworkSummaryBanner(tasks.size, subtitle, onOpenFilter = { showFilters = true })
-        }
-        if (tasks.isEmpty()) item {
-            Column(Modifier.fillMaxWidth().padding(vertical = 28.dp), horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(if (state.refreshing) "正在读取作业…" else assignmentEmptyTitle(state.tasks.isNotEmpty(), ignoredTasks.isNotEmpty(), filters.active),
-                    style = MaterialTheme.typography.titleMedium)
-                if (state.tasks.isNotEmpty()) { if (filters.active) TextButton(onClick = { showFilters = true }) { Text("调整筛选") } }
-                else TextButton(onClick = { scope.launch { model.refresh() } }, enabled = !state.refreshing) { Text("刷新") }
+    AssignmentListWithScrollToTop(scroll, modifier.fillMaxSize()) { scrollModifier, overlayClearance ->
+        TopScrollLazyColumn(state = scroll, modifier = scrollModifier.desktopTouchScroll(scroll),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp + topClearance,
+                bottom = 24.dp + overlayClearance + bottomClearance), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (completion.failure != null) item("completion-error") { AssignmentCompletionFeedback() }
+            state.message?.takeIf { state.failed }?.let { message ->
+                item { AppErrorBanner(message, onRetry = { scope.launch { model.refresh() } }) }
             }
-        }
-        items(tasks, key = { it.id }) { task ->
-            Box(Modifier.animateItem()) { CitelTaskCard(task, onOpen = { model.showTask(task); onOpenTask?.invoke(task) }) }
-        }
-        ignoredAssignmentsSection(ignoredTasks, ignoredExpanded, { ignoredExpanded = !ignoredExpanded }, { it.id }) { task ->
-            CitelTaskCard(task, onOpen = { model.showTask(task); onOpenTask?.invoke(task) })
+            item {
+                HomeworkSummaryBanner(tasks.size, subtitle, onOpenFilter = { showFilters = true })
+            }
+            if (tasks.isEmpty()) item {
+                Column(Modifier.fillMaxWidth().padding(vertical = 28.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(if (state.refreshing) "正在读取作业…" else assignmentEmptyTitle(state.tasks.isNotEmpty(), ignoredTasks.isNotEmpty(), filters.active),
+                        style = MaterialTheme.typography.titleMedium)
+                    if (state.tasks.isNotEmpty()) { if (filters.active) TextButton(onClick = { showFilters = true }) { Text("调整筛选") } }
+                    else TextButton(onClick = { scope.launch { model.refresh() } }, enabled = !state.refreshing) { Text("刷新") }
+                }
+            }
+            items(tasks, key = { it.id }) { task ->
+                Box(Modifier.animateItem()) { CitelTaskCard(task, onOpen = { model.showTask(task); onOpenTask?.invoke(task) }) }
+            }
+            ignoredAssignmentsSection(ignoredTasks, ignoredExpanded, { ignoredExpanded = !ignoredExpanded }, { it.id }) { task ->
+                CitelTaskCard(task, onOpen = { model.showTask(task); onOpenTask?.invoke(task) })
+            }
         }
     }
     if (showDetailSheet) state.selectedTask?.let {
@@ -103,16 +106,17 @@ fun CitelWorkspace(model: CitelModel, holdNetwork: Boolean, onOpen: (String) -> 
             CitelDetailWorkspace(model, fileGateway, onOpen, holdNetwork, directoryGateway = directoryGateway)
         }
     }
-    if (showFilters) AppleSheet(onDismissRequest = { showFilters = false }, title = "作业筛选", needsFullHeight = true, scrollableBody = true) {
-        AssignmentFilterSheet(state.tasks.distinctBy { it.courseId }.map { it.courseId to it.courseName }, filters, model::updateFilters)
+    if (showFilters) AppleSheet(onDismissRequest = { showFilters = false }, title = "作业筛选", fitContentHeight = true) {
+        AssignmentFilterSheet(state.tasks.distinctBy { it.courseId }.map { it.courseId to it.courseName }, filters,
+            ignoredAssignmentCount(state.tasks, completion.completedKeys, { it.completed }, { it.completionKey() }), model::updateFilters)
     }
 
 }
 
 internal fun filteredCitelTasks(tasks: List<CitelTask>, pendingOnly: Boolean, hideExpired: Boolean,
-    courseId: Int?, sortOrder: Int, now: Long): List<CitelTask> {
+    courseId: Int?, sortOrder: Int, now: Long, untilEpoch: Long? = null): List<CitelTask> {
     val filtered = tasks.filter { (!pendingOnly || !it.completed) &&
-        (!hideExpired || it.dueTime?.let { due -> due > now } != false) && (courseId == null || it.courseId == courseId) }
+        deadlineInScope(it.dueTime, now, hideExpired, untilEpoch) && (courseId == null || it.courseId == courseId) }
     return when (sortOrder) {
         1 -> filtered.sortedBy { it.dueTime ?: Long.MAX_VALUE }
         2 -> filtered.sortedByDescending { it.dueTime ?: Long.MIN_VALUE }

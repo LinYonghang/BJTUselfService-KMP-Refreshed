@@ -3,9 +3,7 @@ name: KMP package
 on:
   push:
     tags:
-      - "v*-KMP*"
-      - "v*-Liquid*"
-      # 1.7.9 起应用版本不再带 KMP/Liquid 后缀。v1.7.0 是历史上冻结根 Android 的标签
+      # 含 v*-KMP*、v*-Liquid* 等历史格式。v1.7.0 是历史上冻结根 Android 的标签
       # （工程已于 1.8.6 移除并存档），各打包任务仍跳过它。
       - "v*"
       # debug-* 只打包并上传 Actions 产物，不创建 GitHub Release / pre-release，
@@ -44,7 +42,7 @@ env:
 jobs:
   android:
     name: Android arm64 release APK
-    if: ${{ !inputs.mirror_tag && github.event_name != 'pull_request' && (github.event_name == 'workflow_dispatch' || github.ref_name != 'v1.7.0') }}
+    if: ${{ !inputs.mirror_tag && (github.event_name == 'workflow_dispatch' || github.ref_name != 'v1.7.0') }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -55,6 +53,13 @@ jobs:
 
       - name: Validate Gradle Wrapper
         uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Restore Gradle distribution
+        uses: actions/cache@v4
+        with:
+          # 只随 Gradle 版本变化：setup-java 的缓存键含全部 Gradle 脚本，改一个就连发行包一起失效。
+          path: ~/.gradle/wrapper/dists
+          key: gradle-dist-${{ runner.os }}-${{ hashFiles('multiplatform/gradle/wrapper/gradle-wrapper.properties') }}
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -129,7 +134,7 @@ jobs:
 
   windows:
     name: Windows MSI
-    if: ${{ !inputs.mirror_tag && github.event_name != 'pull_request' && (github.event_name == 'workflow_dispatch' || github.ref_name != 'v1.7.0') }}
+    if: ${{ !inputs.mirror_tag && (github.event_name == 'workflow_dispatch' || github.ref_name != 'v1.7.0') }}
     runs-on: windows-latest
     defaults:
       run:
@@ -147,6 +152,13 @@ jobs:
 
       - name: Validate Gradle Wrapper
         uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Restore Gradle distribution
+        uses: actions/cache@v4
+        with:
+          # 只随 Gradle 版本变化：setup-java 的缓存键含全部 Gradle 脚本，改一个就连发行包一起失效。
+          path: ~/.gradle/wrapper/dists
+          key: gradle-dist-${{ runner.os }}-${{ hashFiles('multiplatform/gradle/wrapper/gradle-wrapper.properties') }}
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -211,7 +223,7 @@ jobs:
 
   macos:
     name: macOS DMG
-    if: ${{ !inputs.mirror_tag && github.event_name != 'pull_request' && (github.event_name == 'workflow_dispatch' || github.ref_name != 'v1.7.0') }}
+    if: ${{ !inputs.mirror_tag && (github.event_name == 'workflow_dispatch' || github.ref_name != 'v1.7.0') }}
     # 原生启动器需要 macOS 27 SDK 重编译（见 docs/build/macos-sdk-launcher.md），
     # 必须用 xcode-27 镜像；macos-15 默认 Xcode 的 SDK 低于 27，脚本会直接拒绝。
     runs-on: xcode-27
@@ -226,6 +238,13 @@ jobs:
 
       - name: Validate Gradle Wrapper
         uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Restore Gradle distribution
+        uses: actions/cache@v4
+        with:
+          # 只随 Gradle 版本变化：setup-java 的缓存键含全部 Gradle 脚本，改一个就连发行包一起失效。
+          path: ~/.gradle/wrapper/dists
+          key: gradle-dist-${{ runner.os }}-${{ hashFiles('multiplatform/gradle/wrapper/gradle-wrapper.properties') }}
 
       - name: Set up JDK 21
         id: jdk21
@@ -335,6 +354,13 @@ jobs:
 
       - name: Validate Gradle Wrapper
         uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Restore Gradle distribution
+        uses: actions/cache@v4
+        with:
+          # 只随 Gradle 版本变化：setup-java 的缓存键含全部 Gradle 脚本，改一个就连发行包一起失效。
+          path: ~/.gradle/wrapper/dists
+          key: gradle-dist-${{ runner.os }}-${{ hashFiles('multiplatform/gradle/wrapper/gradle-wrapper.properties') }}
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4

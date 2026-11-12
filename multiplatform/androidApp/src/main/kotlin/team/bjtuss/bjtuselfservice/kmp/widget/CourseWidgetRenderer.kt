@@ -188,7 +188,7 @@ internal class CourseWidgetRenderer(private val context: Context) {
         val next = model.nextDay
         val first = next?.occurrences?.firstOrNull()
         if (next != null && first != null) {
-            val whenText = "${widgetDayName(next.date, model.now.date)} ${widgetClock(first.session.startMinute)}"
+            val whenText = "${widgetDayName(next.date, model.now.date)} ${widgetClock(first.session.startMinute, first.date)}"
             setTextViewText(R.id.rest_next, if (compact) "下次上课 $whenText" else "下次上课 · $whenText ${first.session.name}")
             setViewVisibility(R.id.rest_next, View.VISIBLE)
         }
@@ -494,7 +494,7 @@ internal class CourseWidgetRenderer(private val context: Context) {
                 val first = hiddenUpcoming.firstOrNull()
                 setTextViewText(R.id.summary_upcoming, when {
                     first == null -> ""
-                    hiddenUpcoming.size == 1 -> "还有 1 节未显示 · ${widgetClock(first.session.startMinute)} ${first.session.name}"
+                    hiddenUpcoming.size == 1 -> "还有 1 节未显示 · ${widgetClock(first.session.startMinute, first.date)} ${first.session.name}"
                     else -> "还有 ${hiddenUpcoming.size} 节未上"
                 })
                 setTextViewText(R.id.summary_finished, if (hiddenFinished > 0) "已上完 $hiddenFinished 节" else "")
@@ -564,8 +564,8 @@ internal class CourseWidgetRenderer(private val context: Context) {
             }
             setTextViewText(R.id.row_detail, occurrence.session.detailLine())
             size(R.id.row_detail, 12.5f)
-            setTextViewText(R.id.row_start, widgetClock(occurrence.session.startMinute))
-            setTextViewText(R.id.row_end, widgetClock(occurrence.session.endMinute))
+            setTextViewText(R.id.row_start, widgetClock(occurrence.session.startMinute, occurrence.date))
+            setTextViewText(R.id.row_end, widgetClock(occurrence.session.endMinute, occurrence.date))
             size(R.id.row_start, 12.5f)
             size(R.id.row_end, 12.5f)
         }
@@ -585,7 +585,7 @@ internal class CourseWidgetRenderer(private val context: Context) {
             }
             setTextViewText(R.id.row_detail, occurrence.session.roomAndTeacher())
             size(R.id.row_detail, 11.5f)
-            setTextViewText(R.id.row_start, widgetClock(occurrence.session.startMinute))
+            setTextViewText(R.id.row_start, widgetClock(occurrence.session.startMinute, occurrence.date))
             size(R.id.row_start, 12.5f)
             if (ongoing) setNightAwareTextColor(this, R.id.row_start, R.color.widget_text_primary)
         }
@@ -612,9 +612,13 @@ internal class CourseWidgetRenderer(private val context: Context) {
             axis.addView(R.id.week_axis, views(R.layout.widget_week_slot_label).apply {
                 val range = layout.slots[slot]
                 setTextViewText(R.id.slot_index, "${slot + 1}")
-                setTextViewText(R.id.slot_start, widgetClock(range.first))
-                setTextViewText(R.id.slot_end, widgetClock(range.last))
+                setTextViewText(R.id.slot_start, widgetClock(range.first, layout.days.firstOrNull()?.date ?: model.now.date, markerSeparator = "\n"))
+                setTextViewText(R.id.slot_end, widgetClock(range.last, layout.days.firstOrNull()?.date ?: model.now.date, markerSeparator = "\n"))
                 if (rowHeight < 34) setViewVisibility(R.id.slot_end, View.GONE)
+                if (layout.showOccurrenceTimes) {
+                    setViewVisibility(R.id.slot_start, View.GONE)
+                    setViewVisibility(R.id.slot_end, View.GONE)
+                }
             })
         }
         gridViews.addView(R.id.week_grid, axis)
@@ -632,7 +636,7 @@ internal class CourseWidgetRenderer(private val context: Context) {
                 }
             }
             val blocks = layout.blocks.filter { it.column == column }
-            weekSegments(blocks.map { WeekSegment(it.firstRow, it.lastRow, it) }, 0, rowCount - 1, model, rowHeight, columnWidth)
+            weekSegments(blocks.map { WeekSegment(it.firstRow, it.lastRow, it, layout.showOccurrenceTimes) }, 0, rowCount - 1, model, rowHeight, columnWidth)
                 .forEach { columnViews.addView(R.id.week_column_body, it) }
             gridViews.addView(R.id.week_grid, columnViews)
         }
@@ -648,6 +652,7 @@ internal class CourseWidgetRenderer(private val context: Context) {
         val first: Int,
         val last: Int,
         val block: team.bjtuss.bjtuselfservice.shared.feature.widget.WidgetWeekBlock,
+        val showClock: Boolean,
     )
 
     /**
@@ -716,14 +721,19 @@ internal class CourseWidgetRenderer(private val context: Context) {
             setTextViewText(R.id.week_block_name, occurrence.session.name)
             setTextViewText(R.id.week_block_place, occurrence.session.place)
             val narrow = segment.block.laneCount > 1
-            val nameSize = if (narrow) 9f else 10.5f
+            val nameSize = if (segment.showClock) 8f else if (narrow) 9f else 10.5f
             val placeSize = if (narrow) 8f else 9f
             setTextViewTextSize(R.id.week_block_name, TypedValue.COMPLEX_UNIT_DIP, nameSize)
             setTextViewTextSize(R.id.week_block_place, TypedValue.COMPLEX_UNIT_DIP, placeSize)
             // RemoteViews 里文字超高会被拦腰裁掉（iOS 会按整行截断）：按色块高度和列宽算出能放几行，
             // 先给课名，剩下的给地点；放不下一整行的地点干脆不显示。
             val shift = if (occurrence.session.isStaggered) minOf(rowHeight * 0.125f, 6f) else 0f
-            val inner = span * rowHeight + (span - 1) * 3f - 3f - shift - 8f
+            val clock = widgetClock(occurrence.session.startMinute, occurrence.date, markerSeparator = "\n")
+            val clockHeight = if (segment.showClock) clock.lines().size * 7f * 1.18f + 2f else 0f
+            setTextViewText(R.id.week_block_time, clock)
+            setViewVisibility(R.id.week_block_time, if (segment.showClock) View.VISIBLE else View.GONE)
+            setNightAwareTextColor(this, R.id.week_block_time, kindContentColor(kind))
+            val inner = span * rowHeight + (span - 1) * 3f - 3f - shift - 8f - clockHeight
             val textWidth = columnWidth - 3f - 6f
             val nameLineHeight = nameSize * 1.18f
             val placeLineHeight = placeSize * 1.18f

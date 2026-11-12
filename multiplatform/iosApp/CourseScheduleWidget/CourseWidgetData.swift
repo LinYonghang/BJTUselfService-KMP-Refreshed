@@ -182,11 +182,47 @@ struct CourseWidgetModel {
 }
 
 enum CourseWidgetCalendar {
+    /// 课表快照的日期和分钟都是北京时间：解析日期、算“今天”、排周视图都按北京时间，
+    /// 手机换到别的时区也不会把课挪到别的格子。
     static var calendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        calendar.locale = Locale(identifier: "zh_CN")
+        return calendar
+    }
+
+    /// 显示给人看的时刻按手机当前时区；东八区时与 [calendar] 相同。
+    static var displayCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
         calendar.locale = Locale(identifier: "zh_CN")
         return calendar
+    }
+
+    /// 以正在渲染的北京日期换算时刻，夏令时偏移也取该日的实际值。
+    static func displayClock(minute: Int, on date: Date, zone: TimeZone = .current, markerSeparator: String = " ") -> String {
+        let instant = calendar.startOfDay(for: date).addingTimeInterval(TimeInterval(minute * 60))
+        return displayClock(instant, schoolDate: date, zone: zone, markerSeparator: markerSeparator)
+    }
+
+    static func displayClock(_ instant: Date, schoolDate: Date, zone: TimeZone = .current, markerSeparator: String = " ") -> String {
+        var localCalendar = displayCalendar
+        localCalendar.timeZone = zone
+        let parts = localCalendar.dateComponents([.year, .month, .day, .hour, .minute], from: instant)
+        // 将当地年月日当作北京日历日期比较；不能用两个时区的 startOfDay 比时刻。
+        let localDay = calendar.date(from: DateComponents(year: parts.year, month: parts.month, day: parts.day))!
+        let shift = dayOffset(localDay, from: schoolDate)
+        let marker = shift < 0 ? "前日" + markerSeparator : (shift > 0 ? "次日" + markerSeparator : "")
+        return marker + String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
+    }
+
+    /// 共享周轴只能展示所有列都一致的时刻（含跨日标记）。
+    static func clocksAreUniform(minutes: [Int], dates: [Date], zone: TimeZone = .current) -> Bool {
+        guard let first = dates.first else { return true }
+        let reference = minutes.map { displayClock(minute: $0, on: first, zone: zone) }
+        return dates.dropFirst().allSatisfy { date in
+            minutes.map { displayClock(minute: $0, on: date, zone: zone) } == reference
+        }
     }
 
     static func dayKey(_ date: Date) -> String {

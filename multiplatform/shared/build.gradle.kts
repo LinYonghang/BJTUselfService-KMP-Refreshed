@@ -162,3 +162,16 @@ compose.resources {
     publicResClass = true
     packageOfResClass = "team.bjtuss.bjtuselfservice.shared.resources"
 }
+
+// 应用按手机时区显示时间；JVM 测试统一跑在北京时间，结果不随开发机或 CI 所在时区变化。
+// 需要验证其他时区的测试显式传入时区。
+tasks.withType<Test>().configureEach {
+    systemProperty("user.timezone", "Asia/Shanghai")
+    providers.systemProperty("assignmentScrollTop.artifactDir").orNull?.let { directory ->
+        systemProperty("assignmentScrollTop.artifactDir", directory)
+    }
+}
+// iOS 模拟器测试同理：SIMCTL_CHILD_ 前缀的变量会传给模拟器里的测试进程。
+tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest>().configureEach {
+    environment("SIMCTL_CHILD_TZ", "Asia/Shanghai")
+}

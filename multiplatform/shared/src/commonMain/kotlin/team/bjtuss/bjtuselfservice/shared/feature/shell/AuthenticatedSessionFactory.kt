@@ -140,6 +140,8 @@ internal fun rememberAuthenticatedSession(
                 loginProtocol.checkSession() is SessionProbeResult.Active
             },
             refreshCoordinator = graph.refreshCoordinator,
+            homeworkRepository = graph.homeworkRepository,
+            assignmentDetails = graph.assignmentDetails,
             remoteAgent = mobileRemote?.controller,
         ).also { sessionHolder.session = it }
     }

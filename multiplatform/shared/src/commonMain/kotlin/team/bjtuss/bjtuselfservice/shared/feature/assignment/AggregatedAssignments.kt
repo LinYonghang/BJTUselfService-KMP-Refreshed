@@ -1,15 +1,13 @@
 package team.bjtuss.bjtuselfservice.shared.feature.assignment
 
-import kotlinx.datetime.LocalDate
-import kotlinx.datetime.toLocalDateTime
-import kotlin.time.Instant
-import team.bjtuss.bjtuselfservice.shared.domain.time.deadlineDisplay
+import kotlinx.datetime.atStartOfDayIn
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import team.bjtuss.bjtuselfservice.shared.cache.CacheStore
 import team.bjtuss.bjtuselfservice.shared.domain.homework.*
+import team.bjtuss.bjtuselfservice.shared.domain.time.SchoolTimeZone
 import team.bjtuss.bjtuselfservice.shared.domain.phyvlab.PhyVlabActivity
 import team.bjtuss.bjtuselfservice.shared.feature.citel.CitelTask
 import team.bjtuss.bjtuselfservice.shared.feature.citel.completed
@@ -24,7 +22,8 @@ data class AggregatedAssignment(
 )
 
 fun aggregateAssignments(homework: List<Homework>, physical: List<PhyVlabActivity>, citel: List<CitelTask>,
-    timeZone: TimeZone = TimeZone.currentSystemDefault()): List<AggregatedAssignment> =
+    // 课程平台的截止时间是北京时间文本；按手机时区换算会让截止时刻和日期筛选错开（手机不在东八区时）。
+    timeZone: TimeZone = SchoolTimeZone): List<AggregatedAssignment> =
     homework.map { AggregatedAssignment(AssignmentSource.COURSE_PLATFORM, "course:${it.stableKey()}", it.courseId, it.courseName,
         parseSchoolLocalDateTime(it.endTime)?.toInstant(timeZone)?.epochSeconds, isHomeworkSubmitted(it), homework = it) } +
     physical.map { AggregatedAssignment(AssignmentSource.PHYVLAB, "phy:${it.courseId}:${it.id}", it.courseId, it.courseName,
@@ -47,11 +46,31 @@ data class AggregateCourseFilter(val allCourses: Boolean = true, val courses: Se
 data class AggregateAssignmentFilters(
     val platformCourses: Map<AssignmentSource, AggregateCourseFilter> = emptyMap(),
     val hideExpired: Boolean = false, val hideSubmitted: Boolean = false, val sortOrder: Int = 1,
+    /** “截止日期”选了指定日期时的截止点（Unix 秒），见 [DeadlineScope]。 */
+    val untilEpoch: Long? = null,
+    /** 上一版按北京时间日期存的“截至某天（含）”，只为读取旧设置保留，加载时由 [migrated] 转成 [untilEpoch]。 */
+    val untilDate: String? = null,
+    /** 1.8.x 一度用过的“截止早于某天（不含当天）”，同样只为读取旧设置保留。 */
     val beforeDate: String? = null,
 ) {
     fun forSource(source: AssignmentSource): AggregateCourseFilter = platformCourses[source] ?: AggregateCourseFilter()
     fun withSource(source: AssignmentSource, filter: AggregateCourseFilter) = copy(platformCourses = platformCourses + (source to filter))
-    val active: Boolean get() = beforeDate != null || hideExpired || hideSubmitted || platformCourses.values.any { !it.allCourses }
+    val active: Boolean get() = untilEpoch != null || hideExpired || hideSubmitted || platformCourses.values.any { !it.allCourses }
+    fun withDeadlineScope(hideExpired: Boolean, untilEpoch: Long?) =
+        copy(hideExpired = hideExpired || untilEpoch != null, untilEpoch = untilEpoch, untilDate = null, beforeDate = null)
+
+    /**
+     * 旧设置都按北京时间理解：“截至 D（含）”的截止点是 D 的北京时间 24:00，“早于 D（不含）”是 D 的北京时间 0 点。
+     * 新的指定日期档本身不含已过期作业。已有截止点时以它为准。
+     */
+    fun migrated(): AggregateAssignmentFilters {
+        if (untilDate == null && beforeDate == null) return this
+        if (untilEpoch != null) return copy(untilDate = null, beforeDate = null)
+        val epoch = legacyUntilDateToEpoch(untilDate)
+            ?: parseUntilDate(beforeDate)?.atStartOfDayIn(SchoolTimeZone)?.epochSeconds
+            ?: return copy(untilDate = null, beforeDate = null)
+        return withDeadlineScope(true, epoch)
+    }
 }
 
 fun AggregatedAssignment.completionKey(): AssignmentCompletionKey? = when (source) {
@@ -62,13 +81,8 @@ fun AggregatedAssignment.completionKey(): AssignmentCompletionKey? = when (sourc
 
 /** 已忽略的作业照常参与筛选和排序，之后由列表拆到末尾的“已忽略”分组，见 [partitionIgnoredAssignments]。 */
 fun filterAggregateAssignments(items: List<AggregatedAssignment>, filters: AggregateAssignmentFilters, now: Long): List<AggregatedAssignment> {
-    val before = filters.beforeDate?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
     val visible = items.filter { filters.forSource(it.source).matches(it.courseId) && (!filters.hideSubmitted || !it.submitted) &&
-        (!filters.hideExpired || it.dueTime?.let { time -> time > now } != false) &&
-        (before == null || it.dueTime?.let { time ->
-            // Midnight is displayed as the previous day's 24:00 and belongs to that day.
-            deadlineDisplay(Instant.fromEpochSeconds(time).toLocalDateTime(TimeZone.of("Asia/Shanghai"))).date < before
-        } == true) }
+        deadlineInScope(it.dueTime, now, filters.hideExpired, filters.untilEpoch) }
     return sortAggregateAssignments(visible, filters.sortOrder)
 }
 
@@ -103,7 +117,7 @@ class AggregateAssignmentFilterStore(private val cache: CacheStore, private val 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     fun load(): AggregateAssignmentFilters = runCatching {
         json.decodeFromString<AggregateAssignmentFilters>(cache.metadata(account, "assignment.aggregate.filters").orEmpty())
-    }.getOrDefault(AggregateAssignmentFilters())
+    }.getOrDefault(AggregateAssignmentFilters()).migrated()
     fun save(filters: AggregateAssignmentFilters) { cache.putMetadata(account, "assignment.aggregate.filters", json.encodeToString(filters)) }
 }
 

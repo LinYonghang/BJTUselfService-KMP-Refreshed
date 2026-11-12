@@ -8,14 +8,21 @@ import team.bjtuss.bjtuselfservice.shared.domain.time.formatSchoolDeadline
 import team.bjtuss.bjtuselfservice.shared.feature.shell.LocalBottomBarClearance
 
 import team.bjtuss.bjtuselfservice.shared.feature.common.WorkspaceEmptyState
+import team.bjtuss.bjtuselfservice.shared.domain.time.formatSchoolDateTime
+import team.bjtuss.bjtuselfservice.shared.feature.assignment.AssignmentDeadlineFilter
+import team.bjtuss.bjtuselfservice.shared.feature.assignment.AssignmentSubmissionFilter
+import team.bjtuss.bjtuselfservice.shared.feature.assignment.ignoredAssignmentCount
 import team.bjtuss.bjtuselfservice.shared.feature.assignment.AssignmentUploadAction
+import team.bjtuss.bjtuselfservice.shared.feature.assignment.UPLOAD_TOO_LARGE_FEEDBACK
 import team.bjtuss.bjtuselfservice.shared.feature.assignment.AssignmentUploadFiles
 import team.bjtuss.bjtuselfservice.shared.feature.assignment.AssignmentUploadMessage
 import team.bjtuss.bjtuselfservice.shared.feature.assignment.AssignmentUploadNote
 import team.bjtuss.bjtuselfservice.shared.feature.assignment.AssignmentUploadSheet
 import team.bjtuss.bjtuselfservice.shared.feature.assignment.mergePickedFiles
 import team.bjtuss.bjtuselfservice.shared.feature.assignment.pickFeedback
+import team.bjtuss.bjtuselfservice.shared.feature.assignment.dropFeedback
 import team.bjtuss.bjtuselfservice.shared.feature.assignment.assignmentCompletionState
+import team.bjtuss.bjtuselfservice.shared.feature.assignment.AssignmentListWithScrollToTop
 import team.bjtuss.bjtuselfservice.shared.feature.assignment.AssignmentCompletionFeedback
 import androidx.compose.runtime.CompositionLocalProvider
 import team.bjtuss.bjtuselfservice.shared.feature.assignment.LocalAssignmentSwipeToIgnore
@@ -298,10 +305,13 @@ fun HomeworkWorkspace(
         AppleSheet(
             onDismissRequest = { showFilterSheet = false },
             title = "作业筛选",
-            needsFullHeight = true,
-            scrollableBody = true,
+            fitContentHeight = true,
         ) {
-            HomeworkFilterSheet(state = state, model = model)
+            HomeworkFilterSheet(
+                state = state,
+                model = model,
+                ignoredCount = ignoredAssignmentCount(state.homework, completion.completedKeys, ::isHomeworkSubmitted) { it.completionKey() },
+            )
         }
     }
 
@@ -405,11 +415,24 @@ private class HomeworkTransferState(
         scope.launch {
             when (val result = fileGateway.pickFiles()) {
                 HomeworkFilePickResult.Cancelled -> Unit
+                HomeworkFilePickResult.TooLarge -> uploadFeedback = UPLOAD_TOO_LARGE_FEEDBACK
                 is HomeworkFilePickResult.Failed -> uploadFeedback = result.pickFeedback()
                 is HomeworkFilePickResult.Selected -> {
                     uploadFiles = mergePickedFiles(uploadFiles, result.files)
                     uploadFeedback = null
                 }
+            }
+        }
+    }
+
+    fun dropUploadFiles(result: HomeworkFilePickResult) {
+        when (result) {
+            HomeworkFilePickResult.Cancelled -> Unit
+            HomeworkFilePickResult.TooLarge -> uploadFeedback = UPLOAD_TOO_LARGE_FEEDBACK
+            is HomeworkFilePickResult.Failed -> uploadFeedback = result.dropFeedback()
+            is HomeworkFilePickResult.Selected -> {
+                uploadFiles = mergePickedFiles(uploadFiles, result.files)
+                uploadFeedback = null
             }
         }
     }
@@ -504,6 +527,7 @@ private fun HomeworkUploadDialog(
             pickEnabled = transfer.pickAvailable,
             onContentChange = { transfer.uploadContent = it },
             onPickFiles = transfer::pickUploadFiles,
+            onDropFiles = transfer::dropUploadFiles,
             onRemoveFile = transfer::removeUploadFile,
             onSubmit = transfer::submitUpload,
         )
@@ -568,7 +592,7 @@ private fun HomeworkSummary(
     onOpenFilter: (() -> Unit)? = null,
 ) {
     // 已忽略的作业不进入数量和 48 小时提醒。
-    val dueSoon = team.bjtuss.bjtuselfservice.shared.domain.homework.dueSoonHomeworkCount(visible, state.now, state.timeZone)
+    val dueSoon = team.bjtuss.bjtuselfservice.shared.domain.homework.dueSoonHomeworkCount(visible, state.now, state.timeZone, state.nowInstant)
     // 仅课程/过期/已提交过滤算「筛选」；改排序不算。
     val filtered = state.selectedCourses.isNotEmpty() || state.hideExpired || state.hideSubmitted
     val subtitle = buildString {
@@ -698,70 +722,32 @@ private fun HomeworkSortBarsIcon(
     }
 }
 
-@Composable
-private fun HomeworkBehaviorFilters(state: HomeworkUiState, model: HomeworkScreenModel) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        HomeworkDeadlineFilterChips(state = state, model = model)
-        OutlinedButton(onClick = model::cycleSortOrder, modifier = Modifier.fillMaxWidth()) {
-            Text(
-                when (state.sortOrder) {
-                    HomeworkSortOrder.ORIGINAL -> "截止时间 · 原顺序"
-                    HomeworkSortOrder.ASCENDING -> "截止时间 · 由近到远"
-                    HomeworkSortOrder.DESCENDING -> "截止时间 · 由远到近"
-                },
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
-/** 截止时间：两个圆角矩形，互斥（显示全部 / 隐藏已过期），另加独立的隐藏已提交。 */
-@OptIn(ExperimentalLayoutApi::class)
+/** 截止日期与提交状态两个切换器，互相独立。 */
 @Composable
 private fun HomeworkDeadlineFilterChips(
     state: HomeworkUiState,
     model: HomeworkScreenModel,
+    ignoredCount: Int,
 ) {
-    FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        FilterChip(
-            selected = !state.hideExpired,
-            onClick = { model.setHideExpired(false) },
-            shape = RoundedCornerShape(10.dp),
-            label = { Text("显示全部日期") },
-        )
-        FilterChip(
-            selected = state.hideExpired,
-            onClick = { model.setHideExpired(true) },
-            shape = RoundedCornerShape(10.dp),
-            label = { Text("隐藏已过期") },
-        )
-        FilterChip(
-            selected = state.hideSubmitted,
-            onClick = { model.setHideSubmitted(!state.hideSubmitted) },
-            shape = RoundedCornerShape(10.dp),
-            label = { Text("隐藏已提交") },
-        )
+    Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        AssignmentDeadlineFilter(state.hideExpired, state.untilEpoch, model::setDeadlineScope)
+        AssignmentSubmissionFilter(state.hideSubmitted, ignoredCount, model::setHideSubmitted)
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ColumnScope.HomeworkFilterSheet(
+private fun HomeworkFilterSheet(
     state: HomeworkUiState,
     model: HomeworkScreenModel,
+    ignoredCount: Int,
 ) {
-    val filterScrollState = rememberScrollState()
+    // 弹层按内容定高（fitContentHeight），滚动和底部安全区由弹层负责，这里不再套滚动。
     Column(
         modifier = Modifier
-            .weight(1f)
             .fillMaxWidth()
-            .verticalScroll(filterScrollState)
-            .desktopTouchScroll(filterScrollState)
-            .sheetScrollContentPadding(),
+            .padding(horizontal = 20.dp)
+            .padding(top = 8.dp, bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         Text("筛选与排序", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
@@ -801,14 +787,7 @@ private fun ColumnScope.HomeworkFilterSheet(
             }
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                "截止时间",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            HomeworkDeadlineFilterChips(state = state, model = model)
-        }
+        HomeworkDeadlineFilterChips(state = state, model = model, ignoredCount = ignoredCount)
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
@@ -890,82 +869,84 @@ private fun HomeworkScrollableContent(
     LaunchedEffect(state.sortOrder, state.hideExpired, state.hideSubmitted, state.selectedCourses, searchActive, query) {
         listState.scrollToItem(0)
     }
-    TopScrollLazyColumn(
-        state = listState,
-        modifier = modifier.desktopTouchScroll(listState),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = PaddingValues(
-            // 首项靠内部顶边距让开原生栏（外层已不再占位，见 Workspace）：8.dp 还原原来的
-            // 列表起笔位置，clearance 让内容从栏底开始、滚起来穿进栏后供原生 blur 采样。
-            top = 8.dp + topClearance,
-            bottom = 18.dp + LocalBottomBarClearance.current,
-        ),
-    ) {
-        if (searchActive) {
-            // 搜索层：只有结果，没有失败横幅、迁移提示和筛选 banner。
-            if (displayed.isEmpty()) {
-                item(key = "homework-search-empty") {
-                    PageSearchEmptyState(query, hint = "搜索课程名或作业标题", modifier = Modifier.animateItem())
+    AssignmentListWithScrollToTop(listState, modifier) { scrollModifier, overlayClearance ->
+        TopScrollLazyColumn(
+            state = listState,
+            modifier = scrollModifier.desktopTouchScroll(listState),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(
+                // 首项靠内部顶边距让开原生栏（外层已不再占位，见 Workspace）：8.dp 还原原来的
+                // 列表起笔位置，clearance 让内容从栏底开始、滚起来穿进栏后供原生 blur 采样。
+                top = 8.dp + topClearance,
+                bottom = 18.dp + overlayClearance + LocalBottomBarClearance.current,
+            ),
+        ) {
+            if (searchActive) {
+                // 搜索层：只有结果，没有失败横幅、迁移提示和筛选 banner。
+                if (displayed.isEmpty()) {
+                    item(key = "homework-search-empty") {
+                        PageSearchEmptyState(query, hint = "搜索课程名或作业标题", modifier = Modifier.animateItem())
+                    }
                 }
-            }
-        } else {
-            // underlap 时失败横幅也收进列表（外层已跳过），平时保持外层旧布局，见 Workspace。
-            if (topClearance > 0.dp) {
-                state.failure?.let { failure ->
-                    item(key = "homework-failure") {
-                        Box(Modifier.animateItem()) {
-                            HomeworkFailureBanner(
-                                failure = failure,
-                                hasContent = state.homework.isNotEmpty(),
-                                onRetry = onRetry,
-                                onDismiss = onDismissFailure,
-                            )
+            } else {
+                // underlap 时失败横幅也收进列表（外层已跳过），平时保持外层旧布局，见 Workspace。
+                if (topClearance > 0.dp) {
+                    state.failure?.let { failure ->
+                        item(key = "homework-failure") {
+                            Box(Modifier.animateItem()) {
+                                HomeworkFailureBanner(
+                                    failure = failure,
+                                    hasContent = state.homework.isNotEmpty(),
+                                    onRetry = onRetry,
+                                    onDismiss = onDismissFailure,
+                                )
+                            }
+                        }
+                    }
+                }
+                if (legacyWarningVisible) {
+                    item(key = "homework-legacy-warning") {
+                        Box(Modifier.animateItem()) { LegacySmartTransportWarning(onDismiss = onDismissLegacyWarning) }
+                    }
+                }
+                item(key = "homework-summary") {
+                    Box(Modifier.animateItem()) { HomeworkSummary(state = state, visible = displayed, onOpenFilter = onOpenFilter) }
+                }
+                if (displayed.isEmpty()) {
+                    item(key = "homework-empty") {
+                        Column(
+                            modifier = Modifier
+                                .animateItem()
+                                .fillMaxWidth()
+                                .padding(vertical = 48.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            val filtered = state.selectedCourses.isNotEmpty() || state.hideExpired || state.hideSubmitted
+                            Text(assignmentEmptyTitle(true, ignored.isNotEmpty(), filtered), style = MaterialTheme.typography.titleMedium)
+                            if (filtered) TextButton(onClick = onOpenFilter) { Text("调整筛选") }
                         }
                     }
                 }
             }
-            if (legacyWarningVisible) {
-                item(key = "homework-legacy-warning") {
-                    Box(Modifier.animateItem()) { LegacySmartTransportWarning(onDismiss = onDismissLegacyWarning) }
-                }
-            }
-            item(key = "homework-summary") {
-                Box(Modifier.animateItem()) { HomeworkSummary(state = state, visible = displayed, onOpenFilter = onOpenFilter) }
-            }
-            if (displayed.isEmpty()) {
-                item(key = "homework-empty") {
-                    Column(
-                        modifier = Modifier
-                            .animateItem()
-                            .fillMaxWidth()
-                            .padding(vertical = 48.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        val filtered = state.selectedCourses.isNotEmpty() || state.hideExpired || state.hideSubmitted
-                        Text(assignmentEmptyTitle(true, ignored.isNotEmpty(), filtered), style = MaterialTheme.typography.titleMedium)
-                        if (filtered) TextButton(onClick = onOpenFilter) { Text("调整筛选") }
+            // 列表与搜索结果沿用同一 key：打开搜索、输入关键字时匹配的卡片留在原地，其余淡出。
+            items(displayed, key = Homework::stableKey) { item ->
+                Box(Modifier.animateItem()) {
+                    CompositionLocalProvider(LocalAssignmentSwipeToIgnore provides !searchActive) {
+                        HomeworkCard(
+                            item = item,
+                            // 紧凑端详情是独立二级页（原生 push），返回时没有可靠的 pop 回调可清选中；
+                            // 选中高亮只在宽屏双栏有意义，这里一律不渲染，避免返回后旧选中颜色残留。
+                            selected = false,
+                            onOpen = onOpen,
+                        )
                     }
                 }
             }
-        }
-        // 列表与搜索结果沿用同一 key：打开搜索、输入关键字时匹配的卡片留在原地，其余淡出。
-        items(displayed, key = Homework::stableKey) { item ->
-            Box(Modifier.animateItem()) {
-                CompositionLocalProvider(LocalAssignmentSwipeToIgnore provides !searchActive) {
-                    HomeworkCard(
-                        item = item,
-                        // 紧凑端详情是独立二级页（原生 push），返回时没有可靠的 pop 回调可清选中；
-                        // 选中高亮只在宽屏双栏有意义，这里一律不渲染，避免返回后旧选中颜色残留。
-                        selected = false,
-                        onOpen = onOpen,
-                    )
+            if (!searchActive) {
+                ignoredAssignmentsSection(ignored, ignoredExpanded, { ignoredExpanded = !ignoredExpanded }, Homework::stableKey) { item ->
+                    HomeworkCard(item = item, selected = false, onOpen = onOpen)
                 }
-            }
-        }
-        if (!searchActive) {
-            ignoredAssignmentsSection(ignored, ignoredExpanded, { ignoredExpanded = !ignoredExpanded }, Homework::stableKey) { item ->
-                HomeworkCard(item = item, selected = false, onOpen = onOpen)
             }
         }
     }
@@ -1015,23 +996,25 @@ private fun HomeworkList(
     LaunchedEffect(sortOrder) {
         listState.scrollToItem(0)
     }
-    LazyColumn(
-        state = listState,
-        modifier = modifier.desktopTouchScroll(listState),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = PaddingValues(bottom = 18.dp + LocalBottomBarClearance.current),
-    ) {
-        items(homework, key = Homework::stableKey) { item ->
-            Box(Modifier.animateItem()) {
-                HomeworkCard(
-                    item = item,
-                    selected = item.stableKey() == selectedKey,
-                    onOpen = onOpen,
-                )
+    AssignmentListWithScrollToTop(listState, modifier) { scrollModifier, overlayClearance ->
+        LazyColumn(
+            state = listState,
+            modifier = scrollModifier.desktopTouchScroll(listState),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(bottom = 18.dp + overlayClearance + LocalBottomBarClearance.current),
+        ) {
+            items(homework, key = Homework::stableKey) { item ->
+                Box(Modifier.animateItem()) {
+                    HomeworkCard(
+                        item = item,
+                        selected = item.stableKey() == selectedKey,
+                        onOpen = onOpen,
+                    )
+                }
             }
-        }
-        ignoredAssignmentsSection(ignored, ignoredExpanded, { ignoredExpanded = !ignoredExpanded }, Homework::stableKey) { item ->
-            HomeworkCard(item = item, selected = item.stableKey() == selectedKey, onOpen = onOpen)
+            ignoredAssignmentsSection(ignored, ignoredExpanded, { ignoredExpanded = !ignoredExpanded }, Homework::stableKey) { item ->
+                HomeworkCard(item = item, selected = item.stableKey() == selectedKey, onOpen = onOpen)
+            }
         }
     }
 }
@@ -1190,7 +1173,7 @@ internal fun homeworkDetailToMarkdown(
         appendLine()
         appendLine("- 课程：${homework.courseName}")
         appendLine("- 类型：${homework.typeLabel()}")
-        appendLine("- 开放时间：${homework.openDate.ifBlank { "未提供" }}")
+        appendLine("- 开放时间：${homework.openDate.ifBlank { "未提供" }.let(::formatSchoolDateTime)}")
         appendLine("- 截止时间：${homework.endTime.ifBlank { "未提供" }.let(::formatSchoolDeadline)}")
         appendLine("- 提交状态：${homework.subStatus.ifBlank { "未标明" }}")
         if (homework.score.isNotBlank()) appendLine("- 评分：${homework.score}")
@@ -1258,7 +1241,7 @@ private fun HomeworkDetailSheetBody(
         Text(homework.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
         HomeworkDetailLine("课程", homework.courseName)
         HomeworkDetailLine("类型", homework.typeLabel())
-        HomeworkDetailLine("开放时间", homework.openDate.ifBlank { "未提供" })
+        HomeworkDetailLine("开放时间", homework.openDate.ifBlank { "未提供" }.let(::formatSchoolDateTime))
         HomeworkDetailLine("截止时间", homework.endTime.ifBlank { "未提供" }.let(::formatSchoolDeadline))
         HomeworkDetailLine("提交状态", homework.subStatus.ifBlank { "未标明" })
         if (homework.score.isNotBlank()) HomeworkDetailLine("评分", homework.score)
@@ -1355,6 +1338,7 @@ private fun ColumnScope.UploadHomeworkContent(
     pickEnabled: Boolean,
     onContentChange: (String) -> Unit,
     onPickFiles: () -> Unit,
+    onDropFiles: (HomeworkFilePickResult) -> Unit,
     onRemoveFile: (Int) -> Unit,
     onSubmit: () -> Unit,
 ) {
@@ -1365,6 +1349,7 @@ private fun ColumnScope.UploadHomeworkContent(
         pickEnabled = pickEnabled,
         onPick = onPickFiles,
         onRemovePending = onRemoveFile,
+        onDrop = onDropFiles,
     )
     OutlinedTextField(
         value = content,

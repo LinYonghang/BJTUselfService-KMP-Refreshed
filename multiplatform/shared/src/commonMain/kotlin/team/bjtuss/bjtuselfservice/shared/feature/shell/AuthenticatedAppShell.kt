@@ -1,5 +1,6 @@
 package team.bjtuss.bjtuselfservice.shared.feature.shell
 
+import kotlinx.datetime.toLocalDateTime
 import team.bjtuss.bjtuselfservice.shared.feature.widget.encode
 import androidx.compose.foundation.layout.windowInsetsPadding
 import team.bjtuss.bjtuselfservice.shared.feature.grade.GradeChangeNoticeDialog
@@ -325,11 +326,20 @@ fun AuthenticatedAppShell(
         scheduleEventCourses(examState.exams, if (physicsLabEnabled) physicsLabState.labs else emptyList(),
             courseState.homeAcademicWeeks, if (physicsDemoState.enabled) physicsDemoState.bookings else emptyList())
     }
+    // 仅主宿主持有时钟；切时区或跨零点后，即使没有网络刷新也更新作业和首页时间。
+    LaunchedEffect(homeworkModel, forcedRouteId, nativeTabBarEnabled) {
+        if (!shouldStartPhyVlabAutoSync(forcedRouteId, nativeTabBarEnabled)) return@LaunchedEffect
+        while (true) {
+            homeworkModel.updateTime()
+            delay(30_000L)
+        }
+    }
     // iOS 课程小组件：课表、实验、校历或日期变化时重写快照；内容（不含生成时间）不变就不写，
     // 避免每次重组都让 WidgetKit 重新加载时间线。
     // iOS 每个原生 Tab 都有一个壳宿主，只让主宿主写（否则同步期间每个宿主各算一遍、各写一遍、
     // 各触发一次 WidgetKit 全量刷新）；同步时数据连续变化，先等一会儿合并成一次，计算放到后台线程。
-    val widgetToday = homeworkState.now.date
+    // 小组件快照按北京时间展开；从原始时刻取北京日期，避免重新推断回拨期间的当地墙钟。
+    val widgetToday = homeworkState.nowInstant.toLocalDateTime(team.bjtuss.bjtuselfservice.shared.domain.time.SchoolTimeZone).date
     var lastWidgetDays by remember(session) { mutableStateOf<List<team.bjtuss.bjtuselfservice.shared.feature.widget.CourseWidgetDay>?>(null) }
     val staggeredClassTimes = settingsState.preferences.staggeredSecondSlot
     LaunchedEffect(courseState.courses, homeScheduleEvents, courseState.homeAcademicWeeks, courseState.currentWeek, widgetToday,
@@ -374,10 +384,11 @@ fun AuthenticatedAppShell(
     val phyVlabEnabled = settingsState.preferences.isPhyVlabEnabled
     // 同步期间壳层随任一状态流重组；只在来源数据变化时重新聚合，作业页才能跳过无关重组。
     val aggregatedAssignments = remember(homeworkState.homework, phyVlabState, phyVlabEnabled,
-        citelState.tasks, citelEnabled, homeworkState.timeZone) {
+        citelState.tasks, citelEnabled) {
+        // 不传手机时区：聚合按学校的北京时间换算，与日期筛选一致。
         aggregateAssignments(homeworkState.homework,
             if (phyVlabEnabled) phyVlabModel.allActivities() else emptyList(),
-            if (citelEnabled) citelState.tasks else emptyList(), homeworkState.timeZone)
+            if (citelEnabled) citelState.tasks else emptyList())
     }
     val renderAssignmentMarkdownActions: @Composable (AssignmentSource) -> Unit = { source ->
         val selected = when (source) {
@@ -785,7 +796,7 @@ fun AuthenticatedAppShell(
                 AppSection.ASSIGNMENTS -> coroutineScope { assignmentSync.forEach { status -> launch { refreshAssignmentSource(status.source) } } }
                 AppSection.CALENDAR -> Unit
                 AppSection.REPORT_CARD_DOWNLOAD -> Unit
-                AppSection.SETTINGS -> Unit
+                AppSection.SETTINGS, AppSection.CHANGELOG -> Unit
                 AppSection.MORE -> Unit
             }
         }
@@ -923,11 +934,18 @@ fun AuthenticatedAppShell(
         }
     }
 
-    if (citelSyncDialogVisible) AppleSheetOrAlert(onDismissRequest = { citelSyncDialogVisible = false },
-        title = "CITEL 同步状态", confirmLabel = "刷新", dismissLabel = "关闭",
-        onConfirm = { citelSyncDialogVisible = false; scope.launch { session.citelModel?.refresh() } }) {
-        Text(citelState.message ?: if (citelState.fromCache) "本轮尚未同步，当前显示上次同步的缓存。" else "尚未同步 CITEL 作业。")
-    }
+    if (citelSyncDialogVisible) AppleAlert(
+        title = "CITEL 同步状态",
+        message = citelState.message ?: if (citelState.fromCache) "本轮尚未同步，当前显示上次同步的缓存。" else "尚未同步 CITEL 作业。",
+        actions = listOf(
+            AppleAlertAction("关闭", AppleAlertRole.Cancel) { citelSyncDialogVisible = false },
+            AppleAlertAction("刷新") {
+                citelSyncDialogVisible = false
+                scope.launch { session.citelModel?.refresh() }
+            },
+        ),
+        onDismissRequest = { citelSyncDialogVisible = false },
+    )
     LaunchedEffect(appCommandBus) {
         appCommandBus?.commands?.collect { command ->
             when (command) {
@@ -1540,7 +1558,7 @@ fun AuthenticatedAppShell(
                 syncFailureItems = homeSyncFailureItems,
                 scrollUnderTopBar = true,
             ) {
-                val homeToday = homeworkState.now.date
+                val homeToday = homeworkState.nowInstant.toLocalDateTime(team.bjtuss.bjtuselfservice.shared.domain.time.SchoolTimeZone).date
                 val homeSchedulePresentation = remember(courseState.courses, homeScheduleEvents,
                     courseState.homeAcademicWeeks, courseState.currentWeek, homeToday, gradeState.courseTypesByCode, staggeredClassTimes) {
                     team.bjtuss.bjtuselfservice.shared.feature.home.HomeSchedulePresentation(
@@ -1580,6 +1598,7 @@ fun AuthenticatedAppShell(
                         // 拿到确切结果后一次显示最终值，不再出现中间值弹跳。
                         isWeekResolved = courseState.weekResolved,
                         now = homeworkState.now,
+                        nowInstant = homeworkState.nowInstant,
                         timeZone = homeworkState.timeZone,
                         isAgendaLoading = homeworkState.isLoading || examState.isLoading ||
                             courseState.isLoading || (phyVlabEnabled && phyVlabState.isLoading) || citelState.refreshing,
@@ -1847,9 +1866,8 @@ fun AuthenticatedAppShell(
                 isRefreshing = coursewareState.isRefreshing,
                 showBack = isPushedHostDestination || route !in compactBottomNavSections,
                 modifier = modifier,
-                // 顶栏 underlap 暂不启用：引导行与课程标题行固定在列表上方，视口到不了栏后。
-                // 且关闭滚动过渡：栏后永远是纯色，过渡只会凭空闪一下。
-                staticTopBar = true,
+                // 课程选择卡片与目录标题都是列表项，内容穿到玻璃顶栏后。
+                scrollUnderTopBar = true,
                 // 与成绩/作业一致：右上角「已同步」+ sync 同一胶囊，勿只留孤图标。
                 idleStatusText = when {
                     coursewareState.failure != null -> "同步失败"
@@ -1873,7 +1891,7 @@ fun AuthenticatedAppShell(
             }
             PlaybackDetailRoute -> DestinationPage(
                 title = "回放播放与下载", expanded = expanded, refreshable = false,
-                isRefreshing = false, showBack = true, modifier = modifier,
+                isRefreshing = false, showBack = true, modifier = modifier, scrollUnderTopBar = true,
             ) {
                 session.playbackModel?.let { model ->
                     team.bjtuss.bjtuselfservice.shared.feature.courseware.PlaybackDetailWorkspace(
@@ -1887,7 +1905,7 @@ fun AuthenticatedAppShell(
                 isRefreshing = coursewareState.isRefreshing,
                 showBack = isPushedHostDestination || route !in compactBottomNavSections,
                 modifier = modifier,
-                staticTopBar = true,
+                scrollUnderTopBar = true,
                 idleStatusText = when {
                     coursewareState.failure != null -> "同步失败"
                     coursewareState.source != null -> "已同步"
@@ -2076,6 +2094,17 @@ fun AuthenticatedAppShell(
                     headerContent = { renderAssignmentMarkdownActions(AssignmentSource.COURSE_PLATFORM) },
                 )
             }
+            AppSection.CHANGELOG -> DestinationPage(
+                title = AppSection.CHANGELOG.title,
+                expanded = expanded,
+                refreshable = false,
+                isRefreshing = false,
+                showBack = isPushedHostDestination || route !in compactBottomNavSections,
+                modifier = modifier,
+                scrollUnderTopBar = true,
+            ) {
+                team.bjtuss.bjtuselfservice.shared.feature.changelog.ChangelogWorkspace(Modifier.fillMaxSize())
+            }
             AppSection.SETTINGS -> DestinationPage(
                 title = AppSection.SETTINGS.title,
                 expanded = expanded,
@@ -2132,6 +2161,8 @@ fun AuthenticatedAppShell(
                 topBarActionLabel = if (mailboxReadyState != null) "写信" else null,
                 onTopBarActionClick = startMailboxComposeFromTopBar,
                 modifier = modifier,
+                // 文件夹选单与邮件同在一个列表里，内容穿到玻璃顶栏后。
+                scrollUnderTopBar = true,
             ) {
                 MailboxWorkspace(
                     model = mailboxModel,

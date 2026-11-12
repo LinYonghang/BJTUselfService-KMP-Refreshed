@@ -25,6 +25,7 @@
 | `status` | `get_status`（外加 Site 设备与快照信息） | 无 |
 | `cache update` | `request_refresh_all` / `request_live_query` 的 `freshness: latest` | — |
 | `citel show <id>` | `request_citel_problem` | `taskId`、`includeFullText` |
+| `homework show <id> [--out <新目录>]` | `request_assignment_detail` + `get_assignment_attachment` | `assignmentId`；本机可下载任意大小的老师附件，Site 只存不超过 5 MB 的 |
 | — | `request_mail_message` | `messageId`（电脑读取正文，学校会标记已读） |
 
 `range` 取值：`today`、`tomorrow`、`this_week`、`next_week`、`next_7_days`；与 `date`、`from`/`to`、`week` 只能选一种。范围最多 120 天。
@@ -57,7 +58,7 @@
 
 一次返回课程平台、物理在线、CITEL 全部来源，默认不按提交状态筛选（`status: all`）。`summary` 给出 `total/pending/overdue/submitted/shown/hiddenUnbooked` 与 `bySource`（每个来源的 `enabled` 与各状态数量）。
 
-每项：`id`（`course_platform:…`/`phyvlab:…`/`citel:…`）、`source`、`sourceLabel`、`course`、`title`、`status`（`pending` 未交未截止、`overdue` 已截止未交、`submitted`；查询参数 `status` 默认 `all`，全部列出）、`statusLabel`、`due`、`dueDate`、`remaining`（仅 pending），以及按来源出现的 `open`、`type`、`judgeStatus`、`score`、`discountFrom`、`discount`、`allowLate`、`submittedCount`、`totalCount`、`enrollment`、`matchedBooking`；`detail=true` 时附 `content`、`url`。
+每项：`id`（`course_platform:…`/`phyvlab:…`/`citel:…`）、`source`、`sourceLabel`、`course`、`title`、`status`（`pending` 未交未截止、`overdue` 已截止未交、`submitted`；查询参数 `status` 默认 `all`，全部列出）、`statusLabel`、`due`、`dueDate`、`remaining`（仅 pending），以及按来源出现的 `open`、`type`、`judgeStatus`、`score`、`discountFrom`、`discount`、`allowLate`、`submittedCount`、`totalCount`、`enrollment`、`matchedBooking`；`detail=true` 时附 `content`、`url` 及可选 `attachments`（元素含 `id`、`name`，可选 `sizeBytes`；未获取详情或无附件时不返回）。
 
 ### 日期规则（只在电脑端换算一次）
 

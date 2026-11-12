@@ -158,11 +158,12 @@ internal actual fun LiveActivityButton(target: LiveActivityTarget, modifier: Mod
 }
 
 private fun leadTitle(target: LiveActivityTarget, minutes: Int): String =
-    "课前 $minutes 分钟显示 (${widgetClock((target.startMinute - minutes).coerceAtLeast(0))})"
+    "课前 $minutes 分钟显示 (${widgetClock((target.startMinute - minutes).coerceAtLeast(0), target.date)})"
 
 /** 已到课前 N 分钟：此时没在显示说明被关掉了，按钮叫“重新开启”。 */
 private fun isWithinLeadWindow(target: LiveActivityTarget, leadMinutes: Int): Boolean {
-    val now = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
+    // 课程的日期和分钟都是北京时间，“现在”也按北京时间取才能直接比较。
+    val now = Clock.System.now().toLocalDateTime(team.bjtuss.bjtuselfservice.shared.domain.time.SchoolTimeZone)
     if (now.date != target.date) return now.date > target.date
     val minute = now.hour * 60 + now.minute
     return minute >= target.startMinute - leadMinutes

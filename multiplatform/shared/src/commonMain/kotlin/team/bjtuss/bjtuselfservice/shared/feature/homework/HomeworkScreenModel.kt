@@ -9,6 +9,8 @@ import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Clock
+import kotlin.time.Instant
+import kotlinx.datetime.toInstant
 import team.bjtuss.bjtuselfservice.shared.data.homework.HomeworkDetailResult
 import team.bjtuss.bjtuselfservice.shared.data.homework.HomeworkRefreshResult
 import team.bjtuss.bjtuselfservice.shared.data.homework.HomeworkRepository
@@ -21,6 +23,7 @@ import team.bjtuss.bjtuselfservice.shared.domain.homework.Homework
 import team.bjtuss.bjtuselfservice.shared.domain.homework.HomeworkDetail
 import team.bjtuss.bjtuselfservice.shared.domain.homework.HomeworkFileContent
 import team.bjtuss.bjtuselfservice.shared.domain.homework.HomeworkFilterPreferences
+import team.bjtuss.bjtuselfservice.shared.domain.time.displayTimeZone
 import team.bjtuss.bjtuselfservice.shared.domain.homework.HomeworkFilterPreferencesStore
 import team.bjtuss.bjtuselfservice.shared.domain.homework.HomeworkSortOrder
 import team.bjtuss.bjtuselfservice.shared.domain.homework.SubmittedHomeworkAttachment
@@ -44,6 +47,7 @@ data class HomeworkUiState(
     val hideExpired: Boolean = false,
     val hideSubmitted: Boolean = false,
     val sortOrder: HomeworkSortOrder = HomeworkSortOrder.ORIGINAL,
+    val untilEpoch: Long? = null,
     val selectedHomeworkKey: String? = null,
     val detail: HomeworkDetail? = null,
     val submittedAttachments: List<SubmittedHomeworkAttachment> = emptyList(),
@@ -61,15 +65,17 @@ data class HomeworkUiState(
     val failure: HomeworkSyncFailure? = null,
     val now: LocalDateTime = LocalDateTime(1970, 1, 1, 0, 0),
     val timeZone: TimeZone = TimeZone.UTC,
+    /** 原始时刻；墙钟在夏令时回拨的重复小时内不能唯一确定一个时刻。 */
+    val nowInstant: Instant = now.toInstant(timeZone),
 ) {
     val courseOptions: List<String>
         get() = homework.map(Homework::courseName).filter(String::isNotBlank).distinct().sorted()
 
     val visibleHomework: List<Homework>
-        get() = sortHomework(filterHomework(homework, selectedCourses, hideExpired, now, hideSubmitted), sortOrder)
+        get() = sortHomework(filterHomework(homework, selectedCourses, hideExpired, now, hideSubmitted, untilEpoch, timeZone, nowInstant), sortOrder)
 
     val dueSoonCount: Int
-        get() = dueSoonHomeworkCount(visibleHomework, now, timeZone)
+        get() = dueSoonHomeworkCount(visibleHomework, now, timeZone, nowInstant)
 
     val selectedHomework: Homework?
         get() = homework.firstOrNull { it.stableKey() == selectedHomeworkKey }
@@ -78,15 +84,15 @@ data class HomeworkUiState(
 class HomeworkScreenModel(
     private val repository: HomeworkRepository,
     private val changeRecorder: DataChangeRecorder<Homework>? = null,
-    private val timeZone: TimeZone = TimeZone.currentSystemDefault(),
+    // “现在”按手机时区取；课程平台的北京时间截止文本在比较前先换成时刻，见 filterHomework。
+    timeZone: TimeZone? = null,
     private val clock: Clock = Clock.System,
-    private val nowProvider: () -> LocalDateTime = {
-        clock.now().toLocalDateTime(timeZone)
-    },
+    private val nowProvider: (() -> LocalDateTime)? = null,
     private val filterStore: HomeworkFilterPreferencesStore? = null,
+    private val timeZoneProvider: () -> TimeZone = { timeZone ?: displayTimeZone() },
 ) {
     private val mutableState = MutableStateFlow(
-        HomeworkUiState(timeZone = timeZone, now = nowProvider()),
+        HomeworkUiState().withCurrentTime(),
     )
     val state: StateFlow<HomeworkUiState> = mutableState.asStateFlow()
 
@@ -95,10 +101,23 @@ class HomeworkScreenModel(
     private val refreshMutex = Mutex()
     private var detailRequestKey: String? = null
 
+    /** 同一次更新使用同一个时区快照，避免切换时区后墙钟与比较时区不匹配。 */
+    private fun HomeworkUiState.withCurrentTime(): HomeworkUiState {
+        val zone = timeZoneProvider()
+        val suppliedNow = nowProvider?.invoke()
+        val instant = suppliedNow?.toInstant(zone) ?: clock.now()
+        return copy(timeZone = zone, now = suppliedNow ?: instant.toLocalDateTime(zone), nowInstant = instant)
+    }
+
+    fun updateTime() {
+        mutableState.value = mutableState.value.withCurrentTime()
+    }
+
     /**
      * @param refreshFromNetwork false 只读缓存；true 在登录成功后由 shell 触发自动同步。
      */
     suspend fun initialize(refreshFromNetwork: Boolean = true) {
+        updateTime()
         if (!cacheLoaded) {
             cacheLoaded = true
             val cached = runCatching(repository::load).getOrNull()
@@ -112,8 +131,7 @@ class HomeworkScreenModel(
                 mutableState.value = mutableState.value.copy(
                     isLoading = true,
                     failure = HomeworkSyncFailure.CACHE,
-                    now = nowProvider(),
-                )
+                ).withCurrentTime()
             }
             if (!refreshFromNetwork) {
                 mutableState.value = mutableState.value.copy(isLoading = false, isRefreshing = false)
@@ -141,8 +159,7 @@ class HomeworkScreenModel(
             isLoading = before.homework.isEmpty(),
             isRefreshing = before.homework.isNotEmpty(),
             failure = null,
-            now = nowProvider(),
-        )
+        ).withCurrentTime()
         try {
             when (val result = repository.refresh()) {
                 is HomeworkRefreshResult.Success -> {
@@ -196,8 +213,7 @@ class HomeworkScreenModel(
             isSubmittedAttachmentsLoading = false,
             detailFailure = null,
             fileFailure = null,
-            now = nowProvider(),
-        )
+        ).withCurrentTime()
         persistFilters()
     }
 
@@ -212,15 +228,18 @@ class HomeworkScreenModel(
             isSubmittedAttachmentsLoading = false,
             detailFailure = null,
             fileFailure = null,
-            now = nowProvider(),
-        )
+        ).withCurrentTime()
         persistFilters()
     }
 
-    fun setHideExpired(hideExpired: Boolean) {
+    fun setHideExpired(hideExpired: Boolean) = setDeadlineScope(hideExpired, untilEpoch = null)
+
+    /** “截止日期”切换器：全部 / 未过期 / 指定日期（[untilEpoch] 非空），三者互斥。 */
+    fun setDeadlineScope(hideExpired: Boolean, untilEpoch: Long?) {
         detailRequestKey = null
         mutableState.value = mutableState.value.copy(
-            hideExpired = hideExpired,
+            hideExpired = hideExpired || untilEpoch != null,
+            untilEpoch = untilEpoch,
             selectedHomeworkKey = null,
             detail = null,
             submittedAttachments = emptyList(),
@@ -228,8 +247,7 @@ class HomeworkScreenModel(
             isSubmittedAttachmentsLoading = false,
             detailFailure = null,
             fileFailure = null,
-            now = nowProvider(),
-        )
+        ).withCurrentTime()
         persistFilters()
     }
 
@@ -244,8 +262,7 @@ class HomeworkScreenModel(
             isSubmittedAttachmentsLoading = false,
             detailFailure = null,
             fileFailure = null,
-            now = nowProvider(),
-        )
+        ).withCurrentTime()
         persistFilters()
     }
 
@@ -260,7 +277,7 @@ class HomeworkScreenModel(
 
     fun setSortOrder(order: HomeworkSortOrder) {
         if (mutableState.value.sortOrder == order) return
-        mutableState.value = mutableState.value.copy(sortOrder = order, now = nowProvider())
+        mutableState.value = mutableState.value.copy(sortOrder = order).withCurrentTime()
         persistFilters()
     }
 
@@ -280,8 +297,8 @@ class HomeworkScreenModel(
             hideExpired = prefs.hideExpired,
             hideSubmitted = prefs.hideSubmitted,
             sortOrder = prefs.sortOrder,
-            now = nowProvider(),
-        )
+            untilEpoch = prefs.untilEpoch,
+        ).withCurrentTime()
     }
 
     private fun persistFilters() {
@@ -294,6 +311,7 @@ class HomeworkScreenModel(
                     hideExpired = current.hideExpired,
                     hideSubmitted = current.hideSubmitted,
                     sortOrder = current.sortOrder,
+                    untilEpoch = current.untilEpoch,
                 ),
             )
         }
@@ -463,8 +481,7 @@ class HomeworkScreenModel(
             isRefreshing = false,
             source = source,
             failure = failure,
-            now = nowProvider(),
-        )
+        ).withCurrentTime()
     }
 
     private fun recordFileResult(result: HomeworkOperationResult<*>) {

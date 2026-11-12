@@ -1,6 +1,9 @@
 package team.bjtuss.bjtuselfservice.shared.feature.homework
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.datetime.LocalDate
+import team.bjtuss.bjtuselfservice.shared.domain.time.SchoolTimeZone
+import team.bjtuss.bjtuselfservice.shared.domain.time.endOfDayEpochSeconds
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlin.test.Test
@@ -307,6 +310,138 @@ class HomeworkScreenModelTest {
         assertEquals(HOMEWORK_AUTO_SYNC_MAX_ATTEMPTS, repository.refreshCount)
         assertEquals(HomeworkSyncFailure.NETWORK, model.state.value.failure)
         assertEquals(HomeworkContentSource.CACHE, model.state.value.source)
+    }
+
+    @Test
+    fun deadlineScopeIsExclusiveAndUntilDateSurvivesRestart() = runBlocking {
+        val store = MemoryFilterStore()
+        val snapshot = HomeworkSnapshot(
+            listOf(
+                homework(1, "程序设计", "2026-07-29 08:00"), // 已过期
+                homework(2, "程序设计", "2026-08-01 00:00"), // 显示为 7 月 31 日 24:00
+                homework(3, "程序设计", "2026-08-01 00:01"),
+                homework(4, "程序设计", ""), // 没有截止时间
+            ),
+        )
+        val model = HomeworkScreenModel(
+            repository = FakeRepository(snapshot, snapshot),
+            timeZone = TimeZone.UTC,
+            nowProvider = { now },
+            filterStore = store,
+        )
+        model.initialize(refreshFromNetwork = false)
+
+        // 截止点：北京时间 7 月 31 日 24:00。
+        val until = endOfDayEpochSeconds(LocalDate(2026, 7, 31), SchoolTimeZone)
+        model.setDeadlineScope(hideExpired = false, untilEpoch = until)
+        assertEquals(listOf(2), model.state.value.visibleHomework.map(Homework::id))
+        assertTrue(model.state.value.hideExpired, "指定日期写回 hideExpired，旧版本读到时退回“未过期”")
+        assertEquals(until, store.saved.untilEpoch)
+
+        val restored = HomeworkScreenModel(
+            repository = FakeRepository(snapshot, snapshot),
+            timeZone = TimeZone.UTC,
+            nowProvider = { now },
+            filterStore = store,
+        )
+        restored.initialize(refreshFromNetwork = false)
+        assertEquals(until, restored.state.value.untilEpoch)
+        assertEquals(listOf(2), restored.state.value.visibleHomework.map(Homework::id))
+
+        // 切回“未过期”清掉日期；没有截止时间的作业重新出现。
+        restored.setHideExpired(true)
+        assertEquals(null, restored.state.value.untilEpoch)
+        assertEquals(listOf(2, 3, 4), restored.state.value.visibleHomework.map(Homework::id))
+        restored.setDeadlineScope(hideExpired = false, untilEpoch = null)
+        assertEquals(4, restored.state.value.visibleHomework.size)
+        assertEquals(HomeworkFilterPreferences(), store.saved)
+    }
+
+    @Test
+    fun nowUsesPhoneTimeZoneWhileBeijingDeadlinesCompareByMoment() = runBlocking {
+        // 北京时间 10-29 23:59 = 纽约 10-29 11:59。
+        val clock = object : kotlin.time.Clock {
+            override fun now() = kotlin.time.Instant.parse("2026-10-29T15:59:00Z")
+        }
+        val newYork = TimeZone.of("America/New_York")
+        val snapshot = HomeworkSnapshot(listOf(
+            homework(1, "程序设计", "2026-10-30 00:00"), // 北京零点 = 纽约 10-29 12:00，还有 1 分钟
+            homework(2, "程序设计", "2026-10-29 23:58"), // 已过 1 分钟
+        ))
+        val model = HomeworkScreenModel(repository = FakeRepository(snapshot, snapshot), timeZone = newYork, clock = clock)
+        model.initialize(refreshFromNetwork = false)
+        assertEquals(LocalDateTime(2026, 10, 29, 11, 59), model.state.value.now)
+        model.setHideExpired(true)
+        assertEquals(listOf(1), model.state.value.visibleHomework.map(Homework::id))
+        // 在纽约选“截至 10 月 29 日”：截止点是纽约 10-29 24:00，北京零点那项在内。
+        model.setDeadlineScope(hideExpired = true, untilEpoch = endOfDayEpochSeconds(LocalDate(2026, 10, 29), newYork))
+        assertEquals(listOf(1), model.state.value.visibleHomework.map(Homework::id))
+        assertEquals(1, model.state.value.dueSoonCount)
+    }
+
+    @Test
+    fun runningSessionRefreshesZoneAndNowTogetherWithoutMovingSavedCutoff() = runBlocking {
+        val clock = object : kotlin.time.Clock {
+            override fun now() = kotlin.time.Instant.parse("2026-10-29T15:59:00Z")
+        }
+        var zone = SchoolTimeZone
+        val snapshot = HomeworkSnapshot(listOf(
+            homework(1, "程序设计", "2026-10-30 00:00"),
+            homework(2, "程序设计", "2026-10-29 23:58"),
+        ))
+        val model = HomeworkScreenModel(
+            repository = FakeRepository(snapshot, snapshot), clock = clock, timeZoneProvider = { zone },
+        )
+        model.initialize(refreshFromNetwork = false)
+        model.setDeadlineScope(true, endOfDayEpochSeconds(LocalDate(2026, 10, 30), zone))
+        val savedCutoff = model.state.value.untilEpoch
+        assertEquals(listOf(1), model.state.value.visibleHomework.map(Homework::id))
+        assertEquals(LocalDateTime(2026, 10, 29, 23, 59), model.state.value.now)
+
+        zone = TimeZone.of("America/New_York")
+        model.updateTime() // 会话计时器，无网络刷新或筛选操作。
+        assertEquals(zone, model.state.value.timeZone)
+        assertEquals(LocalDateTime(2026, 10, 29, 11, 59), model.state.value.now)
+        assertEquals(savedCutoff, model.state.value.untilEpoch)
+        assertEquals(listOf(1), model.state.value.visibleHomework.map(Homework::id))
+        assertEquals(1, model.state.value.dueSoonCount)
+
+        zone = TimeZone.of("Pacific/Auckland")
+        model.setHideSubmitted(true) // 普通状态更新也必须重取时区。
+        assertEquals(zone, model.state.value.timeZone)
+        assertEquals(LocalDateTime(2026, 10, 30, 4, 59), model.state.value.now)
+        assertEquals(savedCutoff, model.state.value.untilEpoch)
+        assertEquals(listOf(1), model.state.value.visibleHomework.map(Homework::id))
+        assertEquals(1, model.state.value.dueSoonCount)
+    }
+
+    @Test
+    fun repeatedLocalHourRetainsTheOriginalInstantForFiltersAndHomeReminders() = runBlocking {
+        var instant = kotlin.time.Instant.parse("2026-11-01T05:30:00Z")
+        val clock = object : kotlin.time.Clock { override fun now() = instant }
+        val zone = TimeZone.of("America/New_York")
+        val snapshot = HomeworkSnapshot(listOf(
+            homework(1, "课程", "2026-11-01 14:15"),
+            homework(2, "课程", "2026-11-01 14:45"),
+        ))
+        val model = HomeworkScreenModel(FakeRepository(snapshot, snapshot), timeZone = zone, clock = clock)
+        model.initialize(refreshFromNetwork = false)
+        model.setHideExpired(true)
+        assertEquals(listOf(1, 2), model.state.value.visibleHomework.map(Homework::id))
+        val firstWallClock = model.state.value.now
+        assertEquals(2, model.state.value.dueSoonCount)
+
+        instant = kotlin.time.Instant.parse("2026-11-01T06:30:00Z")
+        model.updateTime()
+        val state = model.state.value
+        assertEquals(firstWallClock, state.now) // 两次 01:30，却是不同的真实时刻。
+        assertEquals(instant, state.nowInstant)
+        assertEquals(listOf(2), state.visibleHomework.map(Homework::id))
+        assertEquals(1, state.dueSoonCount)
+        val agenda = team.bjtuss.bjtuselfservice.shared.domain.home.buildHomeAgenda(
+            snapshot.homework, emptyList(), state.now.date, state.now, zone, nowInstant = state.nowInstant,
+        )
+        assertEquals(listOf(2), agenda.dueSoonHomework.map(Homework::id))
     }
 
     private class MemoryFilterStore(
