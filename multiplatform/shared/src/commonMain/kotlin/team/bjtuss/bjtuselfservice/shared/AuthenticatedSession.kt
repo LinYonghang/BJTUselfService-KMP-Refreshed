@@ -82,6 +82,7 @@ class AuthenticatedSession(
     val playbackModel: team.bjtuss.bjtuselfservice.shared.feature.courseware.PlaybackScreenModel? = null,
     /** 当前账号的本地手动完成标记；原生页面共享此实例，预览会话可不提供。 */
     val assignmentCompletionStore: team.bjtuss.bjtuselfservice.shared.feature.assignment.AssignmentCompletionStore? = null,
+    val labReminderStore: team.bjtuss.bjtuselfservice.shared.feature.labreminder.LabReminderStore? = null,
 ) {
     private val appResumeGenerationState = MutableStateFlow(0L)
     private val appForegroundGenerationState = MutableStateFlow(0L)

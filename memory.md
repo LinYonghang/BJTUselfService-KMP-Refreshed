@@ -1,12 +1,22 @@
 # BJTUselfService 实时工作记忆
 
-> **当前状态（2026-11-13）**
-> - **当前分支**：`fix/phyvlab-manual-captcha`，从 `origin/main` `b6e9f358`（PR #100）开独立工作树，跟踪 `origin/fix/phyvlab-manual-captcha`，已完成 iOS 物理在线验证码弹层修复与 `2.0.0-KMP` 发版准备，推送并准备 PR 合入 `main`。
-> - **源码版本**：`2.0.0-KMP` / Build 45（最新已发布 Release：`v1.8.6-KMP` / Build 44）
-> - **远端活跃分支**：`main`、`feat/mac-swift`（macOS 原生 SwiftUI 探索）；原 `feat/homework-submit-cli-drop`、`feat/agent-assignment-detail` 已合入并删除。
-> - **已完成事项归档**：2.0 开发期已合入 `main` 的全部功能（课程回放、macOS/Windows 硬件合成、作业忽略与筛选拆分、全应用设备时区、离线更新日志、`DESIGN.md` / `AppleAlert` / `AppleMenuPickerCard`、物理实验 IP 备用路径、上传文件拖放、本机 CLI 交作业、统一作业详情与远程增量同步等，PR #68–#99）均已移入 `history_full.md`。
+> **当前 fork 开发状态（2026-11-20）**
+> - **当前分支**：`feat/lab-report-reminders`，基于上游 `main` 的 `e8e44f34`；本任务只修改 `LinYonghang/BJTUselfService-KMP-Refreshed`，不合并主分支、不向原作者提交。
+> - **源码版本**：保持 `2.0.0-KMP` / Build 45；本轮不发版。
+> - **进行中**：物理实验 / 演示实验准备与报告跟进提醒。共享桌面和 Windows 宿主编译通过，新增18项测试通过；Windows全量回归1476项中1470通过、1跳过、5失败（Unix脚本/符号链接/macOS清理逻辑的环境差异）。移动端编译与投递尚待对应环境检查，不能视作各平台验收通过。
+> - 下方保留的物理在线记录来自上游，不属于本轮实验提醒任务。
 
 ---
+
+## 进行中：实验准备与报告跟进（fork）
+
+- **行为**：默认关闭；首页提供入口。每次计划开始前24小时提醒；最后一次计划结束后24小时、7天、14天跟进报告。两周实验先按原项目的日期和本地时长设置展开，再以最后一节结束时间计算报告节点；这些节点不等于报告截止时间。
+- **状态**：本账号缓存保存实验历史、已读节点及手动“报告已提交 / 不再提醒”，可恢复后续提醒；暂不自动判断学校报告状态。首次导入只包含未来及近14天实验；错过的节点按实验合并显示最近一条，准备提醒到实验开始后失效。成功同步取消未来预约；离线/失败不推断取消；已结束记录保留用于报告跟进。来源停用或清除账号后暂停该来源提醒；切换来源账号清除旧来源记录及已读标记。
+- **平台**：Android AlarmManager 非精确闹钟、通知权限入口、重启重排；iOS UserNotifications 本地通知；桌面仅应用运行或托盘驻留时通知。最多登记最近48个未来节点，重开应用续排，不对退出后的桌面通知作保证。手动处理、关闭、退出、清缓存/全量擦除接入通知取消；通知注册与退出串行，避免退出后旧注册重新出现。
+- **位置**：`shared/feature/labreminder` 的共享模型、存储、首页卡片与平台通知实现；会话组合根和首页接入；Android 宿主只提供生命周期内的权限请求入口。
+- **验证**：只使用虚构实验、内存缓存与离线界面；未读取学校账号资料，也未进行预约、取消、报告提交或其他学校写操作。新增测试覆盖时间边界、两周实验、来源隔离、错过节点、缓存错误、手动处理、清缓存及退出与注册并发。浅/深色与1.7倍文字组件截图放在忽略的 `.artifacts/lab-reminders/`。
+- **待验收边界**：当前 Windows 无 Android SDK / Apple 工具链，移动端编译和真机通知（后台、省电、拒权、重启、卸载）待对应环境验证。iOS 原生 sheet 玻璃、滚动末尾安全区及 Android/macOS 窄/宽窗口均不可标为已验收。
+- **本机命令**：在 `multiplatform/` 运行 `:shared:desktopTest --tests '*LabRemindersTest' --tests '*LabReminderRenderTest' :windowsApp:compileKotlinWindows` 通过；最终完整回归 `:shared:desktopTest :windowsApp:compileKotlinWindows` 为上述1476项结果，新增16项逻辑测试与2项账号隔离/组件渲染测试均通过。完整报告和截图留在忽略的 `.artifacts/lab-reminders/`。5个失败均位于未改动的 `DesktopAgentIntegrationTest`、`MacUninstallCleanerTest`，不通过修改原测试或授予符号链接权限来掩盖。
 
 ## 进行中 / 待处理：物理在线相关检查
 

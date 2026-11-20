@@ -106,6 +106,7 @@ class AppDataGraph(
 ) {
     val accountScope: String = profile.studentId
     val assignmentCompletionStore = team.bjtuss.bjtuselfservice.shared.feature.assignment.AssignmentCompletionStore(cacheStore, accountScope)
+    val labReminderStore = team.bjtuss.bjtuselfservice.shared.feature.labreminder.LabReminderStore(cacheStore, accountScope)
 
     private val smartPlatformEndpoint = smartPlatformEndpointFor(platformFamily)
     val homeChangeFeed = CacheStoreHomeChangeFeedRepository(accountScope, cacheStore)
@@ -198,13 +199,13 @@ class AppDataGraph(
         ),
         persistPreferences = onPreferencesChanged,
         clearAccountCache = {
-            assignmentCompletionStore.clearWith { cacheStore.clearAccount(accountScope) }
+            labReminderStore.clearWith { assignmentCompletionStore.clearWith { cacheStore.clearAccount(accountScope) } }
         },
         prepareUninstall = {
             playbackTaskManager.cancelAllAndJoin()
             val cleaner = team.bjtuss.bjtuselfservice.shared.feature.settings.platformLocalDataCleaner()
             val wiped = cleaner?.clearLocalData(cacheStore, removeAgent = true) == true
-            if (wiped) onPurgeLogout(accountScope)
+            if (wiped) { labReminderStore.stopNotifications(); onPurgeLogout(accountScope) }
             wiped
         },
         wipeAllLocalData = {
@@ -212,7 +213,7 @@ class AppDataGraph(
             val cleaner = team.bjtuss.bjtuselfservice.shared.feature.settings.platformLocalDataCleaner()
             if (cleaner != null) {
                 val wiped = cleaner.clearLocalData(cacheStore)
-                if (wiped) onPurgeLogout(accountScope)
+                if (wiped) { labReminderStore.stopNotifications(); onPurgeLogout(accountScope) }
                 wiped
             } else {
                 val labAccounts = (cacheStore.metadataAccountScopes("physicslab.configured") + accountScope).distinct()
@@ -233,7 +234,7 @@ class AppDataGraph(
                 val wiped = cacheCleared && credentialsPurged && labCredentialsPurged
                 // Stay signed out after a full wipe, or background sync could
                 // immediately recreate personal cache rows from this live session.
-                if (wiped) onPurgeLogout(accountScope)
+                if (wiped) { labReminderStore.stopNotifications(); onPurgeLogout(accountScope) }
                 wiped
             }
         },

@@ -310,6 +310,9 @@ fun AuthenticatedAppShell(
     val physicsLabState by physicsLabFlow.collectAsState()
     val physicsDemoFlow = remember(session) { session.physicsDemoModel?.state ?: MutableStateFlow(team.bjtuss.bjtuselfservice.shared.feature.phydemo.PhysicsDemoState()) }
     val physicsDemoState by physicsDemoFlow.collectAsState()
+    val labReminderBinding = session.labReminderStore?.let {
+        team.bjtuss.bjtuselfservice.shared.feature.labreminder.bindLabReminders(it, physicsLabState, physicsDemoState, physicsLabEnabled)
+    }
     val phyVlabAccountFlow = remember(session) {
         session.phyVlabAccountModel?.state ?: MutableStateFlow(team.bjtuss.bjtuselfservice.shared.feature.phyvlab.PhyVlabAccountState())
     }
@@ -1654,6 +1657,10 @@ fun AuthenticatedAppShell(
                         exams = examState.exams,
                         phyVlabEvents = homeAgendaEvents,
                         reminderAssignments = aggregatedAssignments,
+                        labReminderStore = session.labReminderStore,
+                        labReminderBinding = labReminderBinding,
+                        physicsLabRemindersEnabled = physicsLabEnabled && physicsLabState.configured,
+                        physicsDemoRemindersEnabled = physicsDemoState.enabled && physicsDemoState.configured,
                         currentWeek = courseState.currentWeek,
                         academicWeeks = courseState.homeAcademicWeeks,
                         // 周数只在被校历确认后显示：确认前统一「日程加载中」，
