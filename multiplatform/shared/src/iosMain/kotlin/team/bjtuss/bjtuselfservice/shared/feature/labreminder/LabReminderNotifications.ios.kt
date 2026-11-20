@@ -40,7 +40,7 @@ private object IosLabReminderNotifier : LabReminderNotifier {
             val content = UNMutableNotificationContent().apply {
                 setTitle(reminder.title)
                 setBody(reminder.body)
-                setSound(UNNotificationSound.defaultSound())
+                setSound(UNNotificationSound.defaultSound)
             }
             val request = UNNotificationRequest.requestWithIdentifier(ids[index], content,
                 UNTimeIntervalNotificationTrigger.triggerWithTimeInterval(seconds.toDouble(), false))
