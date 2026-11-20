@@ -36,7 +36,7 @@ class LabReminderStore(private val persistence: LabReminderPersistence) {
         catch (_: Exception) { mutable.value = LabReminderState(error = "实验提醒记录读取失败，未覆盖原记录。") }
     }
     private suspend fun change(update: (LabReminderDocument) -> LabReminderDocument) = mutex.withLock {
-        if (!mutable.value.loaded) return@withLock
+        if (!mutable.value.loaded || stopped) return@withLock
         val next = update(mutable.value.document)
         if (next == mutable.value.document) return@withLock
         try {
@@ -74,7 +74,22 @@ class LabReminderStore(private val persistence: LabReminderPersistence) {
         }
 
     suspend fun stopNotifications() = withContext(NonCancellable) {
-        notificationMutex.withLock { stopped = true; notifier?.cancel() }
+        notificationMutex.withLock { mutex.withLock { stopped = true; notifier?.cancel() } }
+    }
+
+    /** Full wipe waits for in-flight writes and blocks queued writes after successful deletion. */
+    suspend fun wipeWith(wipe: suspend () -> Boolean): Boolean = withContext(NonCancellable) {
+        notificationMutex.withLock {
+            mutex.withLock {
+                val wiped = wipe()
+                if (wiped) {
+                    stopped = true
+                    notifier?.cancel()
+                    mutable.value = LabReminderState(loaded = true)
+                }
+                wiped
+            }
+        }
     }
 
     /** Share the settings clear-cache transaction; never let an in-flight save restore deleted records. */

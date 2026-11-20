@@ -3,7 +3,7 @@
 > **当前 fork 开发状态（2026-11-20）**
 > - **当前分支**：`feat/lab-report-reminders`，基于上游 `main` 的 `e8e44f34`；本任务只修改 `LinYonghang/BJTUselfService-KMP-Refreshed`，不合并主分支、不向原作者提交。
 > - **源码版本**：保持 `2.0.0-KMP` / Build 45；本轮不发版。
-> - **进行中**：物理实验 / 演示实验准备与报告跟进提醒。共享桌面和 Windows 宿主编译通过，新增18项测试通过；Windows全量回归1476项中1470通过、1跳过、5失败（Unix脚本/符号链接/macOS清理逻辑的环境差异）。移动端编译与投递尚待对应环境检查，不能视作各平台验收通过。
+> - **进行中**：物理实验 / 演示实验准备与报告跟进提醒。共享桌面和 Windows 宿主编译通过，新增20项测试通过；Windows全量回归1476项中1470通过、1跳过、5失败（Unix脚本/符号链接/macOS清理逻辑的环境差异）。首轮远端 Android 和 Windows CI 已通过，Apple 检查仍在运行；后续擦除并发修正还需最新提交的 CI，不视作各平台验收通过。
 > - 下方保留的物理在线记录来自上游，不属于本轮实验提醒任务。
 
 ---
@@ -17,6 +17,8 @@
 - **验证**：只使用虚构实验、内存缓存与离线界面；未读取学校账号资料，也未进行预约、取消、报告提交或其他学校写操作。新增测试覆盖时间边界、两周实验、来源隔离、错过节点、缓存错误、手动处理、清缓存及退出与注册并发。浅/深色与1.7倍文字组件截图放在忽略的 `.artifacts/lab-reminders/`。
 - **待验收边界**：当前 Windows 无 Android SDK / Apple 工具链，移动端编译和真机通知（后台、省电、拒权、重启、卸载）待对应环境验证。iOS 原生 sheet 玻璃、滚动末尾安全区及 Android/macOS 窄/宽窗口均不可标为已验收。
 - **本机命令**：在 `multiplatform/` 运行 `:shared:desktopTest --tests '*LabRemindersTest' --tests '*LabReminderRenderTest' :windowsApp:compileKotlinWindows` 通过；最终完整回归 `:shared:desktopTest :windowsApp:compileKotlinWindows` 为上述1476项结果，新增16项逻辑测试与2项账号隔离/组件渲染测试均通过。完整报告和截图留在忽略的 `.artifacts/lab-reminders/`。5个失败均位于未改动的 `DesktopAgentIntegrationTest`、`MacUninstallCleanerTest`，不通过修改原测试或授予符号链接权限来掩盖。
+- **后续修正**：iOS 默认提示音改为属性读取；全量擦除与正在保存的提醒串行，成功擦除后旧会话禁止继续写入，失败时保持偏好可编辑。补充2项并发/失败恢复测试；新增20项测试、账号路由回归及 Windows 编译再次通过。
+- **Windows 实际界面验收**：运行 `desktopTest` 中独立合成数据窗口，实际打开卡片/设置、滚到底、将虚构提醒标为已读并观察其消失、切换深色后关闭窗口。内存数据、无学校请求、无系统通知登记；此证据只覆盖 Windows 共享组件，不替代 Android/iOS/macOS 真机通知与玻璃顶栏验收。
 
 ## 进行中 / 待处理：物理在线相关检查
 

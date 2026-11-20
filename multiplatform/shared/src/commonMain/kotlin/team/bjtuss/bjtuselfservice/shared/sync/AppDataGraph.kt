@@ -201,19 +201,19 @@ class AppDataGraph(
         clearAccountCache = {
             labReminderStore.clearWith { assignmentCompletionStore.clearWith { cacheStore.clearAccount(accountScope) } }
         },
-        prepareUninstall = {
+        prepareUninstall = { labReminderStore.wipeWith {
             playbackTaskManager.cancelAllAndJoin()
             val cleaner = team.bjtuss.bjtuselfservice.shared.feature.settings.platformLocalDataCleaner()
             val wiped = cleaner?.clearLocalData(cacheStore, removeAgent = true) == true
-            if (wiped) { labReminderStore.stopNotifications(); onPurgeLogout(accountScope) }
+            if (wiped) onPurgeLogout(accountScope)
             wiped
-        },
-        wipeAllLocalData = {
+        } },
+        wipeAllLocalData = { labReminderStore.wipeWith {
             playbackTaskManager.cancelAllAndJoin()
             val cleaner = team.bjtuss.bjtuselfservice.shared.feature.settings.platformLocalDataCleaner()
             if (cleaner != null) {
                 val wiped = cleaner.clearLocalData(cacheStore)
-                if (wiped) { labReminderStore.stopNotifications(); onPurgeLogout(accountScope) }
+                if (wiped) onPurgeLogout(accountScope)
                 wiped
             } else {
                 val labAccounts = (cacheStore.metadataAccountScopes("physicslab.configured") + accountScope).distinct()
@@ -234,10 +234,10 @@ class AppDataGraph(
                 val wiped = cacheCleared && credentialsPurged && labCredentialsPurged
                 // Stay signed out after a full wipe, or background sync could
                 // immediately recreate personal cache rows from this live session.
-                if (wiped) { labReminderStore.stopNotifications(); onPurgeLogout(accountScope) }
+                if (wiped) onPurgeLogout(accountScope)
                 wiped
             }
-        },
+        } },
         checkLatestRelease = { AppUpdateChecker.fetchLatest(transport) },
         checkReleaseFromSource = { source -> AppUpdateChecker.fetchLatest(transport, source) },
     )

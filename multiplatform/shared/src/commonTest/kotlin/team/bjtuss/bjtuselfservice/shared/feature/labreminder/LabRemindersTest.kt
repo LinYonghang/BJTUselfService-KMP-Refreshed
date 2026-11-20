@@ -160,6 +160,42 @@ class LabRemindersTest {
         assertNull(persistence.value)
     }
 
+    @Test fun wipeWaitsForInFlightWritesAndPreventsOldActionsRecreatingDeletedRecords() = runBlocking {
+        val started = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        var value: String? = null
+        var blockWrite = false
+        val store = LabReminderStore(object : LabReminderPersistence {
+            override fun load() = value
+            override fun save(next: String) {
+                if (blockWrite) runBlocking { started.complete(Unit); release.await() }
+                value = next
+            }
+        })
+        store.load()
+        blockWrite = true
+        val saving = launch { store.enable(true) }
+        started.await()
+        var wiped = false
+        val wiping = async(start = CoroutineStart.UNDISPATCHED) { store.wipeWith { value = null; wiped = true; true } }
+        assertFalse(wiped)
+        release.complete(Unit); saving.join(); assertTrue(wiping.await())
+        store.reconcile(listOf(record), LabSource.PHYSICS, 0)
+        store.enable(true)
+        assertNull(value)
+        assertEquals(LabReminderDocument(), store.state.value.document)
+    }
+
+    @Test fun unsuccessfulWipeKeepsReminderPreferenceEditable() = runBlocking {
+        val persistence = MemoryPersistence()
+        val store = LabReminderStore(persistence)
+        store.load(); store.enable(true)
+        assertFalse(store.wipeWith { false })
+        store.enable(false)
+        assertFalse(store.state.value.document.enabled)
+        assertNotNull(persistence.value)
+        Unit
+    }
+
     private class MemoryPersistence : LabReminderPersistence {
         var value: String? = null
         var failWrite = false
