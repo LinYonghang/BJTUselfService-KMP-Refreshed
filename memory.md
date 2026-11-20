@@ -3,6 +3,7 @@
 > **当前 fork 开发状态（2026-11-20）**
 > - **当前分支**：`feat/lab-report-reminders`，基于上游 `main` 的 `e8e44f34`；本任务只修改 `LinYonghang/BJTUselfService-KMP-Refreshed`，不合并主分支、不向原作者提交。
 > - **源码版本**：保持 `2.0.0-KMP` / Build 45；本轮不发版。
+> - **合并 PR**：已创建 fork 内 [PR #2](https://github.com/LinYonghang/BJTUselfService-KMP-Refreshed/pull/2)，`feat/lab-report-reminders` → `main`，普通非草稿 PR；创建后确认无代码冲突，PR 合并检查由 GitHub 自动运行。尚未执行合并。
 > - **实现与验证**：代码已推送到 fork。验证提交 `334769a` 的 KMP security checks（run `44656711438`）全部通过：Android Debug/优化版、iOS/macOS 共享测试、macOS/Windows 应用镜像、远程站点和更新日志一致性。新增20项测试及2项账号路由回归在本机通过；Windows本机全量回归1476项中1470通过、1跳过、5项 macOS 环境检查失败，这些测试未被修改或删除。系统通知实际投递和移动端原生界面仍未实机验收。
 > - 下方保留的物理在线记录来自上游，不属于本轮实验提醒任务。
 
@@ -19,7 +20,7 @@
 - **本机命令**：在 `multiplatform/` 运行 `:shared:desktopTest --tests '*LabRemindersTest' --tests '*LabReminderRenderTest' :windowsApp:compileKotlinWindows` 通过；最终完整回归 `:shared:desktopTest :windowsApp:compileKotlinWindows` 为上述1476项结果，新增16项逻辑测试与2项账号隔离/组件渲染测试均通过。完整报告和截图留在忽略的 `.artifacts/lab-reminders/`。5个失败均位于未改动的 `DesktopAgentIntegrationTest`、`MacUninstallCleanerTest`，不通过修改原测试或授予符号链接权限来掩盖。
 - **后续修正**：iOS 默认提示音改为属性读取；全量擦除与正在保存的提醒串行，成功擦除后旧会话禁止继续写入，失败时保持偏好可编辑。补充2项并发/失败恢复测试；新增20项测试、账号路由回归及 Windows 编译再次通过。
 - **Windows 实际界面验收**：运行 `desktopTest` 中独立合成数据窗口，实际打开卡片/设置、滚到底、将虚构提醒标为已读并观察其消失、切换深色后关闭窗口。内存数据、无学校请求、无系统通知登记；此证据只覆盖 Windows 共享组件，不替代 Android/iOS/macOS 真机通知与玻璃顶栏验收。
-- **最终远端验证**：[KMP security checks / run 44656711438](https://github.com/LinYonghang/BJTUselfService-KMP-Refreshed/actions/runs/44656711438)，代码提交 `334769a573e05ba5624823be91bb55fc40cfa7a5`，6个作业全部成功；之后仅补充本文件的验证记录，不修改代码。未创建 PR、合并 main、打标签或发版。
+- **最终远端验证**：[KMP security checks / run 44656711438](https://github.com/LinYonghang/BJTUselfService-KMP-Refreshed/actions/runs/44656711438)，代码提交 `334769a573e05ba5624823be91bb55fc40cfa7a5`，6个作业全部成功；之后仅补充本文件的验证与 PR 记录，不修改代码。现已创建 fork 内 PR #2，PR 检查以该 PR 的 Checks 为准；尚未合并 main、打标签或发版。
 
 ## 进行中 / 待处理：物理在线相关检查
 
