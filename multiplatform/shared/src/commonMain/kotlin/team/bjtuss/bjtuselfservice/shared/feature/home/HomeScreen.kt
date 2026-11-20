@@ -177,6 +177,10 @@ fun HomeWorkspace(
     /** 未经作业页筛选的来源数据，仅用于把截止提醒关联到本地完成标记。 */
     reminderAssignments: List<team.bjtuss.bjtuselfservice.shared.feature.assignment.AggregatedAssignment> = emptyList(),
     nowInstant: Instant = now.toInstant(timeZone),
+    labReminderStore: team.bjtuss.bjtuselfservice.shared.feature.labreminder.LabReminderStore? = null,
+    labReminderBinding: team.bjtuss.bjtuselfservice.shared.feature.labreminder.LabReminderBinding? = null,
+    physicsLabRemindersEnabled: Boolean = false,
+    physicsDemoRemindersEnabled: Boolean = false,
 ) {
     val state by model.state.collectAsState()
     val pageListState = rememberLazyListState()
@@ -280,6 +284,13 @@ fun HomeWorkspace(
             if (dueSoonItems.isNotEmpty()) {
                 item(key = "home-due-soon") {
                     HomeDueSoonSection(dueSoonItems, expanded, onOpenHomework)
+                }
+            }
+            if (labReminderStore != null && labReminderBinding != null) {
+                item(key = "home-lab-reminders") {
+                    team.bjtuss.bjtuselfservice.shared.feature.labreminder.LabReminderCard(
+                        labReminderStore, labReminderBinding, nowInstant.epochSeconds,
+                        physicsLabRemindersEnabled, physicsDemoRemindersEnabled)
                 }
             }
             if (hasMeaningfulChanges) {

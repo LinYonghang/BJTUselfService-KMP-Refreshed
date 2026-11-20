@@ -106,6 +106,7 @@ class AppDataGraph(
 ) {
     val accountScope: String = profile.studentId
     val assignmentCompletionStore = team.bjtuss.bjtuselfservice.shared.feature.assignment.AssignmentCompletionStore(cacheStore, accountScope)
+    val labReminderStore = team.bjtuss.bjtuselfservice.shared.feature.labreminder.LabReminderStore(cacheStore, accountScope)
 
     private val smartPlatformEndpoint = smartPlatformEndpointFor(platformFamily)
     val homeChangeFeed = CacheStoreHomeChangeFeedRepository(accountScope, cacheStore)
@@ -198,16 +199,16 @@ class AppDataGraph(
         ),
         persistPreferences = onPreferencesChanged,
         clearAccountCache = {
-            assignmentCompletionStore.clearWith { cacheStore.clearAccount(accountScope) }
+            labReminderStore.clearWith { assignmentCompletionStore.clearWith { cacheStore.clearAccount(accountScope) } }
         },
-        prepareUninstall = {
+        prepareUninstall = { labReminderStore.wipeWith {
             playbackTaskManager.cancelAllAndJoin()
             val cleaner = team.bjtuss.bjtuselfservice.shared.feature.settings.platformLocalDataCleaner()
             val wiped = cleaner?.clearLocalData(cacheStore, removeAgent = true) == true
             if (wiped) onPurgeLogout(accountScope)
             wiped
-        },
-        wipeAllLocalData = {
+        } },
+        wipeAllLocalData = { labReminderStore.wipeWith {
             playbackTaskManager.cancelAllAndJoin()
             val cleaner = team.bjtuss.bjtuselfservice.shared.feature.settings.platformLocalDataCleaner()
             if (cleaner != null) {
@@ -221,7 +222,10 @@ class AppDataGraph(
                     (cacheStore.metadataAccountScopes("phydemo.configured") + accountScope).distinct()
                         .forEach { securityCoordinator.physicsDemoVault(it)?.clear() }
                     (cacheStore.metadataAccountScopes("phyvlab.configured") + accountScope).distinct()
-                        .forEach { securityCoordinator.phyVlabVault(it)?.clear() }
+                        .forEach {
+                            securityCoordinator.phyVlabSessionVault(it)?.clear()
+                            securityCoordinator.phyVlabVault(it)?.clear()
+                        }
                     (cacheStore.metadataAccountScopes("citel.username") + accountScope).distinct()
                         .forEach { securityCoordinator.citelVault(it)?.clear() }
                 }.isSuccess
@@ -233,7 +237,7 @@ class AppDataGraph(
                 if (wiped) onPurgeLogout(accountScope)
                 wiped
             }
-        },
+        } },
         checkLatestRelease = { AppUpdateChecker.fetchLatest(transport) },
         checkReleaseFromSource = { source -> AppUpdateChecker.fetchLatest(transport, source) },
     )
@@ -278,10 +282,16 @@ class AppDataGraph(
     // 物理在线不再走学校统一认证：MoodleSession 缺失时用独立账号登录，账号由设置页保存。
     // 协议与账号模型互相引用（协议读账号、账号保存前用协议校验），用单元素持有者打破初始化环。
     private val phyVlabAccountHolder = arrayOfNulls<team.bjtuss.bjtuselfservice.shared.feature.phyvlab.PhyVlabAccountModel>(1)
-    val phyVlabSessionProtocol = PhyVlabSessionProtocol(transport, credentials = { phyVlabAccountHolder[0]?.credentials() })
+    val phyVlabSessionProtocol = PhyVlabSessionProtocol(
+        transport,
+        sessionVault = securityCoordinator.phyVlabSessionVault(accountScope),
+        credentials = { phyVlabAccountHolder[0]?.credentials() },
+    )
     val phyVlabAccountModel = team.bjtuss.bjtuselfservice.shared.feature.phyvlab.PhyVlabAccountModel(
         accountScope, cacheStore, securityCoordinator.phyVlabVault(accountScope),
         signIn = phyVlabSessionProtocol::signInWith,
+        rememberSession = phyVlabSessionProtocol::rememberCurrentSession,
+        clearSession = phyVlabSessionProtocol::clearRememberedSession,
     ).also { phyVlabAccountHolder[0] = it }
     val phyVlabLocalDataSource = CacheStorePhyVlabLocalDataSource(cacheStore)
     val phyVlabModel = PhyVlabScreenModel(

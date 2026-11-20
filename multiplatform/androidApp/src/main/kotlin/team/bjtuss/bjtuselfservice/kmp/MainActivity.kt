@@ -23,6 +23,9 @@ class MainActivity : ComponentActivity() {
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         CourseLiveUpdates.onPermissionResult(this, granted)
     }
+    private val labReminderPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        team.bjtuss.bjtuselfservice.shared.feature.labreminder.AndroidLabReminderPermission.complete(granted)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,6 +36,9 @@ class MainActivity : ComponentActivity() {
             CourseLiveUpdates.reconcile(it)
         }
         CourseLiveUpdates.install(this)
+        team.bjtuss.bjtuselfservice.shared.feature.labreminder.AndroidLabReminderPermission.attach(sessionOwner) {
+            labReminderPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
         CourseLiveUpdates.attachPermissionRequester {
             notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -79,6 +85,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        team.bjtuss.bjtuselfservice.shared.feature.labreminder.AndroidLabReminderPermission.detach(sessionOwner)
         refreshRate.stop()
         CourseLiveUpdates.attachPermissionRequester(null)
         if (isFinishing) AndroidAuthenticatedSessionRegistry.update(sessionOwner, null)

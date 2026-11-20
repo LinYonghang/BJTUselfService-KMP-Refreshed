@@ -129,12 +129,13 @@ internal fun rememberAuthenticatedSession(
             libraryModel = libraryModel,
             aggregateFilterStore = team.bjtuss.bjtuselfservice.shared.feature.assignment.AggregateAssignmentFilterStore(cacheStore, profile.studentId),
             assignmentCompletionStore = graph.assignmentCompletionStore,
+            labReminderStore = graph.labReminderStore,
             homeModel = graph.homeModel,
             homeChangeFeed = graph.homeChangeFeed,
             homeworkFileGateway = homeworkFileGateway,
             coursewareDirectoryGateway = coursewareDirectoryGateway,
             systemCalendarGateway = systemCalendarGateway,
-            onLogout = { logoutScope.launch { graph.playbackTaskManager.cancelAllAndJoin(); onLogout(profile.studentId) }; Unit },
+            onLogout = { logoutScope.launch { graph.labReminderStore.stopNotifications(); graph.playbackTaskManager.cancelAllAndJoin(); onLogout(profile.studentId) }; Unit },
             reauthenticateSession = graph.sessionRecovery::attempt,
             probeSession = {
                 loginProtocol.checkSession() is SessionProbeResult.Active
